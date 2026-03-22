@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reagan's Rhythm Rumble</title>
+<style>
+/* =========================================================================
+   GLOBAL STYLES — Dark arcade aesthetic, centered canvas
+   ========================================================================= */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0f;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Segoe UI', 'Consolas', monospace;
+}
+canvas {
+  display: block;
+  border: 2px solid #222;
+  border-radius: 6px;
+  /* Crisp pixel rendering */
+  image-rendering: auto;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+
+// =============================================================================
+// CONFIGURATION — Tweak these constants to tune gameplay feel
+// =============================================================================
+
+// --- Canvas ---
+const CANVAS_W = 800;                 // Canvas width in pixels
+const CANVAS_H = 700;                 // Canvas height in pixels
+
+// --- Lane Layout ---
+const NUM_LANES    = 4;               // Number of drum lanes
+const LANE_WIDTH   = 100;             // Pixel width of each lane
+const LANE_GAP     = 20;              // Gap between lanes
+const LANE_START_X = (CANVAS_W - (NUM_LANES * LANE_WIDTH + (NUM_LANES - 1) * LANE_GAP)) / 2;
+
+// --- Note Behaviour ---
+const NOTE_RADIUS  = 22;             // Radius of falling beat circles
+const NOTE_SPEED   = 280;            // Pixels per second (increase = faster)
+
+// --- Hit Zone ---
+const HIT_ZONE_Y      = CANVAS_H - 100; // Y position of the hit target line
+const PERFECT_WINDOW   = 25;          // Pixels from center for "PERFECT" (±)
+const GOOD_WINDOW      = 55;          // Pixels from center for "GOOD" (±)
+
+// --- Scoring ---
+const PERFECT_PTS = 100;
+const GOOD_PTS    = 50;
+
+// --- Combo Multiplier Thresholds ---
+const COMBO_TIERS = [
+  { threshold: 0,  multiplier: 1 },
+  { threshold: 5,  multiplier: 2 },
+  { threshold: 15, multiplier: 4 },
+  { threshold: 30, multiplier: 8 },
+];
+
+// --- Note Spawn (Random mode) ---
+const RANDOM_SPAWN_INTERVAL = 0.35;  // Seconds between potential random spawns
+const RANDOM_SPAWN_CHANCE   = 0.55;  // Probability each interval spawns a note
+
+// --- Lane Definitions: key, label, drum colour, drum type ---
+const LANES = [
+  { key: "d", label: "D",  color: "#00ccff", glowColor: "#00ccff", drumType: "hihat",  name: "Hi-Hat" },
+  { key: "f", label: "F",  color: "#ff3355", glowColor: "#ff3355", drumType: "snare",  name: "Snare"  },
+  { key: "j", label: "J",  color: "#33ff66", glowColor: "#33ff66", drumType: "tom",    name: "Tom"    },
+  { key: "k", label: "K",  color: "#ffdd00", glowColor: "#ffdd00", drumType: "crash",  name: "Crash"  },
+];
+
+// =============================================================================
+// SONG LIBRARY — Each song has { title, bpm, notes: [{ timeMs, lane }] }
+// Lane Guide: 0=Hi-Hat(D), 1=Snare(F), 2=Tom(J), 3=Crash(K)
+// Add new songs here — the engine converts timeMs → seconds automatically.
+// =============================================================================
+
+const songLibrary = {
+  "basic_rock_groove": {
+    title: "The Standard Rock Groove",
+    bpm: 120,
+    notes: [
+      // Measure 1 — basic "boom-bap"
+      { timeMs: 500,  lane: 0 },
+      { timeMs: 1000, lane: 0 },
+      { timeMs: 1000, lane: 1 },
+      { timeMs: 1500, lane: 0 },
+      { timeMs: 2000, lane: 0 },
+      { timeMs: 2000, lane: 1 },
+      // Measure 2 — adding flair
+      { timeMs: 2500, lane: 0 },
+      { timeMs: 3000, lane: 0 },
+      { timeMs: 3000, lane: 1 },
+      { timeMs: 3500, lane: 0 },
+      // Measure 2 ending — Tom fill into Crash
+      { timeMs: 3750, lane: 2 },
+      { timeMs: 3875, lane: 2 },
+      { timeMs: 4000, lane: 3 },
+    ],
+  },
+  "reagans_challenge": {
+    title: "Reagan's Double-Time Challenge",
+    bpm: 150,
+    notes: [
+      { timeMs: 500,  lane: 0 },
+      { timeMs: 750,  lane: 0 },
+      { timeMs: 1000, lane: 1 },
+      { timeMs: 1250, lane: 0 },
+      { timeMs: 1500, lane: 0 },
+      { timeMs: 1500, lane: 1 },
+      { timeMs: 1750, lane: 2 },
+      { timeMs: 2000, lane: 0 },
+      { timeMs: 2000, lane: 1 },
+      { timeMs: 2250, lane: 0 },
+      { timeMs: 2500, lane: 2 },
+      { timeMs: 2750, lane: 0 },
+      { timeMs: 3000, lane: 1 },
+      { timeMs: 3000, lane: 0 },
+      { timeMs: 3250, lane: 0 },
+      { timeMs: 3500, lane: 2 },
+      { timeMs: 3625, lane: 2 },
+      { timeMs: 3750, lane: 1 },
+      { timeMs: 4000, lane: 3 },
+    ],
+  },
+};
+
+// --- Convert songLibrary (timeMs) → engine-ready SONGS array (time in seconds) ---
+const SONGS = Object.values(songLibrary).map(song => ({
+  title: song.title,
+  bpm:   song.bpm,
+  notes: song.notes
+    .map(n => ({ time: n.timeMs / 1000, lane: n.lane }))
+    .sort((a, b) => a.time - b.time),
+}));
+
+// =============================================================================
+// CANVAS SETUP
+// =============================================================================
+const canvas = document.getElementById("game");
+const ctx    = canvas.getContext("2d");
+canvas.width  = CANVAS_W;
+canvas.height = CANVAS_H;
+
+// =============================================================================
+// WEB AUDIO — Synthesize 4 distinct drum sounds, no external files needed
+// =============================================================================
+let audioCtx = null;
+
+/** Lazily create AudioContext on first user interaction (browser policy). */
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+
+/**
+ * Play a synthesized drum hit.
+ * @param {"hihat"|"snare"|"tom"|"crash"} type — Which drum to trigger.
+ */
+function playDrum(type) {
+  ensureAudio();
+  const t = audioCtx.currentTime;
+
+  switch (type) {
+    // -----------------------------------------------------------------------
+    // HI-HAT — Short burst of filtered noise
+    // -----------------------------------------------------------------------
+    case "hihat": {
+      const dur = 0.08;
+      const bufSize = audioCtx.sampleRate * dur;
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      // High-pass filter for that metallic "tss" character
+      const hp = audioCtx.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 7000;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.35, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      src.connect(hp).connect(gain).connect(audioCtx.destination);
+      src.start(t); src.stop(t + dur);
+      break;
+    }
+    // -----------------------------------------------------------------------
+    // SNARE — Noise burst + low sine body
+    // -----------------------------------------------------------------------
+    case "snare": {
+      const dur = 0.15;
+      // Noise component
+      const bufSize = audioCtx.sampleRate * dur;
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const noiseSrc = audioCtx.createBufferSource();
+      noiseSrc.buffer = buf;
+      const bp = audioCtx.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 3000; bp.Q.value = 1.0;
+      const noiseGain = audioCtx.createGain();
+      noiseGain.gain.setValueAtTime(0.5, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      noiseSrc.connect(bp).connect(noiseGain).connect(audioCtx.destination);
+      noiseSrc.start(t); noiseSrc.stop(t + dur);
+      // Body sine
+      const osc = audioCtx.createOscillator();
+      osc.type = "triangle"; osc.frequency.setValueAtTime(180, t);
+      osc.frequency.exponentialRampToValueAtTime(80, t + dur);
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.setValueAtTime(0.45, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(oscGain).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + dur);
+      break;
+    }
+    // -----------------------------------------------------------------------
+    // TOM — Deep sine wave with pitch bend
+    // -----------------------------------------------------------------------
+    case "tom": {
+      const dur = 0.25;
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(150, t);
+      osc.frequency.exponentialRampToValueAtTime(50, t + dur);
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.55, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + dur);
+      break;
+    }
+    // -----------------------------------------------------------------------
+    // CRASH — Long noise burst with shimmer
+    // -----------------------------------------------------------------------
+    case "crash": {
+      const dur = 0.5;
+      const bufSize = audioCtx.sampleRate * dur;
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      const bp = audioCtx.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 5000; bp.Q.value = 0.5;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.4, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      src.connect(bp).connect(gain).connect(audioCtx.destination);
+      src.start(t); src.stop(t + dur);
+      break;
+    }
+  }
+}
+
+// =============================================================================
+// GAME STATE
+// =============================================================================
+
+// Possible game states: "menu", "playing", "results"
+let gameState    = "menu";
+let menuSelection = 0; // 0 = random, 1..N = song index
+const menuItems  = ["Random Mode", ...SONGS.map(s => s.title)];
+
+let score        = 0;
+let combo        = 0;
+let maxCombo     = 0;
+let multiplier   = 1;
+let totalPerfect = 0;
+let totalGood    = 0;
+let totalMiss    = 0;
+
+// Active notes on screen: { lane, y, hit (bool), missed (bool) }
+let notes        = [];
+// Floating text popups: { text, x, y, alpha, color, scale }
+let floats       = [];
+// Particles: { x, y, vx, vy, life, maxLife, color, radius }
+let particles    = [];
+// Per-lane flash timers (seconds remaining)
+let laneFlash    = [0, 0, 0, 0];
+
+// Song mode state
+let songMode       = false;
+let songNotes      = [];       // Sorted array of { time, lane }
+let songNextIdx    = 0;        // Next note to spawn
+let songStartTime  = 0;        // performance.now() when song started
+let songTotalNotes = 0;
+let songFinished   = false;
+let songEndTimer   = 0;        // Delay after last note before showing results
+
+// Random mode state
+let randomSpawnTimer = 0;
+
+// Timing
+let lastFrameTime = 0;
+
+// =============================================================================
+// HELPER — Get lane center X
+// =============================================================================
+function laneCenterX(lane) {
+  return LANE_START_X + lane * (LANE_WIDTH + LANE_GAP) + LANE_WIDTH / 2;
+}
+
+// =============================================================================
+// FLOATING TEXT — Spawn feedback messages that drift upward and fade
+// =============================================================================
+function spawnFloat(text, x, y, color) {
+  floats.push({
+    text, x, y, alpha: 1.0, color,
+    scale: 1.5, // Start slightly large, shrinks to 1
+    vy: -80,     // Drift speed (pixels/sec, upward)
+  });
+}
+
+// =============================================================================
+// PARTICLE SYSTEM — Burst of glowing dots on Perfect hits
+// =============================================================================
+function spawnParticles(x, y, color, count = 18) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.4;
+    const speed = 120 + Math.random() * 180;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.5 + Math.random() * 0.3,
+      maxLife: 0.8,
+      color,
+      radius: 2 + Math.random() * 3,
+    });
+  }
+}
+
+// =============================================================================
+// COMBO — Recalculate multiplier from current combo count
+// =============================================================================
+function updateMultiplier() {
+  multiplier = 1;
+  for (const tier of COMBO_TIERS) {
+    if (combo >= tier.threshold) multiplier = tier.multiplier;
+  }
+}
+
+// =============================================================================
+// INPUT HANDLING
+// =============================================================================
+const keysDown = {};
+
+document.addEventListener("keydown", (e) => {
+  const key = e.key.toLowerCase();
+  if (keysDown[key]) return; // Ignore held keys
+  keysDown[key] = true;
+
+  // --- Menu navigation ---
+  if (gameState === "menu") {
+    if (key === "arrowup" || key === "w") {
+      menuSelection = (menuSelection - 1 + menuItems.length) % menuItems.length;
+    } else if (key === "arrowdown" || key === "s") {
+      menuSelection = (menuSelection + 1) % menuItems.length;
+    } else if (key === "enter" || key === " ") {
+      startGame(menuSelection);
+    }
+    return;
+  }
+
+  // --- Results screen ---
+  if (gameState === "results") {
+    if (key === "enter" || key === " " || key === "escape") {
+      gameState = "menu";
+    }
+    return;
+  }
+
+  // --- Gameplay: check lane keys ---
+  const laneIdx = LANES.findIndex(l => l.key === key);
+  if (laneIdx === -1) return;
+
+  ensureAudio();
+  playDrum(LANES[laneIdx].drumType);
+  laneFlash[laneIdx] = 0.15; // Flash the lane for 150ms
+
+  // Find the closest unhit note in this lane within GOOD_WINDOW
+  let bestNote = null;
+  let bestDist = Infinity;
+  for (const note of notes) {
+    if (note.lane !== laneIdx || note.hit || note.missed) continue;
+    const dist = Math.abs(note.y - HIT_ZONE_Y);
+    if (dist < GOOD_WINDOW && dist < bestDist) {
+      bestDist = dist;
+      bestNote = note;
+    }
+  }
+
+  const cx = laneCenterX(laneIdx);
+  const col = LANES[laneIdx].color;
+
+  if (bestNote) {
+    bestNote.hit = true;
+    if (bestDist <= PERFECT_WINDOW) {
+      // PERFECT hit
+      combo++;
+      totalPerfect++;
+      updateMultiplier();
+      score += PERFECT_PTS * multiplier;
+      spawnFloat("PERFECT!", cx, HIT_ZONE_Y - 30, "#fff");
+      spawnParticles(cx, HIT_ZONE_Y, col, 22);
+    } else {
+      // GOOD hit
+      combo++;
+      totalGood++;
+      updateMultiplier();
+      score += GOOD_PTS * multiplier;
+      spawnFloat("GOOD", cx, HIT_ZONE_Y - 30, col);
+      spawnParticles(cx, HIT_ZONE_Y, col, 8);
+    }
+    if (combo > maxCombo) maxCombo = combo;
+  } else {
+    // Wrong timing — miss
+    combo = 0;
+    totalMiss++;
+    updateMultiplier();
+    spawnFloat("MISS", cx, HIT_ZONE_Y - 30, "#ff4466");
+  }
+});
+
+document.addEventListener("keyup", (e) => {
+  keysDown[e.key.toLowerCase()] = false;
+});
+
+// =============================================================================
+// START GAME — Reset state, choose random or song mode
+// =============================================================================
+function startGame(selection) {
+  score = 0; combo = 0; maxCombo = 0; multiplier = 1;
+  totalPerfect = 0; totalGood = 0; totalMiss = 0;
+  notes = []; floats = []; particles = [];
+  laneFlash = [0, 0, 0, 0];
+  randomSpawnTimer = 0;
+  songFinished = false;
+  songEndTimer = 0;
+
+  if (selection === 0) {
+    // Random mode
+    songMode = false;
+  } else {
+    // Song mode
+    songMode = true;
+    const song = SONGS[selection - 1];
+    songNotes = song.notes.map(n => ({ ...n }));
+    songNextIdx = 0;
+    songTotalNotes = songNotes.length;
+    // Calculate how long a note takes to fall to the hit zone
+    const fallTime = HIT_ZONE_Y / NOTE_SPEED;
+    songStartTime = performance.now() / 1000 + 1.5; // 1.5s lead-in
+  }
+
+  gameState = "playing";
+}
+
+// =============================================================================
+// UPDATE — Main game logic tick
+// =============================================================================
+function update(dt) {
+  if (gameState !== "playing") return;
+
+  const now = performance.now() / 1000;
+
+  // --- Spawn Notes ---
+  if (songMode) {
+    // Song mode: spawn notes based on song timeline
+    const fallTime = HIT_ZONE_Y / NOTE_SPEED;
+    const songTime = now - songStartTime;
+    while (songNextIdx < songNotes.length) {
+      const sn = songNotes[songNextIdx];
+      // Spawn early enough that the note reaches hit zone at sn.time
+      if (songTime >= sn.time - fallTime) {
+        notes.push({ lane: sn.lane, y: -NOTE_RADIUS, hit: false, missed: false });
+        songNextIdx++;
+      } else {
+        break;
+      }
+    }
+    // Check if song is done (all notes spawned and cleared)
+    if (songNextIdx >= songNotes.length && notes.every(n => n.hit || n.missed || n.y > CANVAS_H + 50)) {
+      songEndTimer += dt;
+      if (songEndTimer > 2.0) {
+        songFinished = true;
+        gameState = "results";
+        return;
+      }
+    }
+  } else {
+    // Random mode: spawn notes at intervals
+    randomSpawnTimer += dt;
+    if (randomSpawnTimer >= RANDOM_SPAWN_INTERVAL) {
+      randomSpawnTimer -= RANDOM_SPAWN_INTERVAL;
+      if (Math.random() < RANDOM_SPAWN_CHANCE) {
+        const lane = Math.floor(Math.random() * NUM_LANES);
+        notes.push({ lane, y: -NOTE_RADIUS, hit: false, missed: false });
+      }
+    }
+  }
+
+  // --- Move Notes ---
+  for (const note of notes) {
+    if (note.hit) continue;
+    note.y += NOTE_SPEED * dt;
+    // Miss detection: note passed well beyond the hit zone
+    if (!note.missed && note.y > HIT_ZONE_Y + GOOD_WINDOW) {
+      note.missed = true;
+      combo = 0;
+      totalMiss++;
+      updateMultiplier();
+      spawnFloat("MISS", laneCenterX(note.lane), HIT_ZONE_Y - 30, "#ff4466");
+    }
+  }
+
+  // --- Remove off-screen / hit notes (after fade) ---
+  notes = notes.filter(n => {
+    if (n.hit) return false;  // Remove immediately on hit (visual handled by particles)
+    if (n.y > CANVAS_H + 60) return false; // Off screen
+    return true;
+  });
+
+  // --- Update Lane Flashes ---
+  for (let i = 0; i < NUM_LANES; i++) {
+    if (laneFlash[i] > 0) laneFlash[i] -= dt;
+  }
+
+  // --- Update Floating Text ---
+  for (const f of floats) {
+    f.y += f.vy * dt;
+    f.alpha -= dt * 1.5;
+    f.scale = Math.max(1.0, f.scale - dt * 2);
+  }
+  floats = floats.filter(f => f.alpha > 0);
+
+  // --- Update Particles ---
+  for (const p of particles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 200 * dt; // Gravity
+    p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// =============================================================================
+// DRAW — All rendering goes here
+// =============================================================================
+
+/** Draw the darkened lane backgrounds with subtle grid lines. */
+function drawLanes() {
+  for (let i = 0; i < NUM_LANES; i++) {
+    const x = LANE_START_X + i * (LANE_WIDTH + LANE_GAP);
+    const col = LANES[i].color;
+
+    // Lane background
+    ctx.fillStyle = "rgba(255,255,255,0.03)";
+    ctx.fillRect(x, 0, LANE_WIDTH, CANVAS_H);
+
+    // Lane border glow
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.15;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = col;
+    ctx.strokeRect(x, 0, LANE_WIDTH, CANVAS_H);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+
+    // Flash overlay when key pressed
+    if (laneFlash[i] > 0) {
+      const flashAlpha = laneFlash[i] / 0.15 * 0.25;
+      ctx.fillStyle = col;
+      ctx.globalAlpha = flashAlpha;
+      ctx.fillRect(x, 0, LANE_WIDTH, CANVAS_H);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+/** Draw the hit zone — a glowing horizontal target line with key labels. */
+function drawHitZone() {
+  // Main line
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.4;
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = "#ffffff";
+  const leftEdge  = LANE_START_X;
+  const rightEdge = LANE_START_X + NUM_LANES * LANE_WIDTH + (NUM_LANES - 1) * LANE_GAP;
+  ctx.beginPath();
+  ctx.moveTo(leftEdge, HIT_ZONE_Y);
+  ctx.lineTo(rightEdge, HIT_ZONE_Y);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+
+  // Per-lane target circles + key labels
+  for (let i = 0; i < NUM_LANES; i++) {
+    const cx = laneCenterX(i);
+    const col = LANES[i].color;
+    const flash = laneFlash[i] > 0;
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(cx, HIT_ZONE_Y, NOTE_RADIUS + 4, 0, Math.PI * 2);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = flash ? 3 : 1.5;
+    ctx.globalAlpha = flash ? 0.9 : 0.35;
+    ctx.shadowBlur = flash ? 20 : 8;
+    ctx.shadowColor = col;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+
+    // Key label below hit zone
+    ctx.font = "bold 16px monospace";
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.7;
+    ctx.textAlign = "center";
+    ctx.fillText(LANES[i].label, cx, HIT_ZONE_Y + NOTE_RADIUS + 22);
+    ctx.globalAlpha = 1;
+
+    // Drum name below key
+    ctx.font = "10px monospace";
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.4;
+    ctx.fillText(LANES[i].name, cx, HIT_ZONE_Y + NOTE_RADIUS + 36);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/** Draw falling note circles with neon glow. */
+function drawNotes() {
+  for (const note of notes) {
+    if (note.hit) continue;
+    const cx = laneCenterX(note.lane);
+    const col = LANES[note.lane].color;
+    const missAlpha = note.missed ? 0.3 : 1.0;
+
+    // Glow
+    ctx.beginPath();
+    ctx.arc(cx, note.y, NOTE_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.globalAlpha = missAlpha * 0.8;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = col;
+    ctx.fill();
+
+    // Inner bright core
+    ctx.beginPath();
+    ctx.arc(cx, note.y, NOTE_RADIUS * 0.55, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.globalAlpha = missAlpha * 0.6;
+    ctx.shadowBlur = 0;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+}
+
+/** Draw floating text feedback. */
+function drawFloats() {
+  for (const f of floats) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, f.alpha);
+    ctx.font = `bold ${Math.round(14 * f.scale)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = f.color;
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x, f.y);
+    ctx.restore();
+  }
+}
+
+/** Draw particles. */
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius * alpha, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = alpha * 0.9;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = p.color;
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
+/** Draw the HUD — score, combo, multiplier. */
+function drawHUD() {
+  // Score (top left)
+  ctx.font = "bold 28px monospace";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#fff";
+  ctx.shadowBlur = 6;
+  ctx.shadowColor = "#00ccff";
+  ctx.fillText(String(score).padStart(7, "0"), 20, 40);
+  ctx.shadowBlur = 0;
+
+  // Song title (top center, song mode only)
+  if (songMode && songNextIdx <= songNotes.length) {
+    const songIdx = menuSelection - 1;
+    if (songIdx >= 0 && songIdx < SONGS.length) {
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#888";
+      ctx.fillText(SONGS[songIdx].title.toUpperCase(), CANVAS_W / 2, 25);
+    }
+  }
+
+  // Combo + Multiplier (top right)
+  if (combo > 0) {
+    // Multiplier with pulse effect
+    const pulse = multiplier > 1 ? 1 + Math.sin(performance.now() * 0.008) * 0.08 : 1;
+    const mSize = Math.round(24 * pulse);
+    ctx.font = `bold ${mSize}px monospace`;
+    ctx.textAlign = "right";
+    const mCol = multiplier >= 8 ? "#ffdd00" : multiplier >= 4 ? "#ff8800" : multiplier >= 2 ? "#33ff66" : "#aaa";
+    ctx.fillStyle = mCol;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = mCol;
+    ctx.fillText(`${multiplier}x`, CANVAS_W - 20, 40);
+    ctx.shadowBlur = 0;
+
+    // Combo count
+    ctx.font = "14px monospace";
+    ctx.fillStyle = "#ccc";
+    ctx.fillText(`${combo} COMBO`, CANVAS_W - 20, 60);
+  }
+}
+
+/** Draw the background — subtle animated grid for arcade feel. */
+function drawBackground() {
+  // Dark fill
+  ctx.fillStyle = "#0a0a12";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Subtle vertical scanlines
+  ctx.globalAlpha = 0.03;
+  for (let x = 0; x < CANVAS_W; x += 3) {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x, 0, 1, CANVAS_H);
+  }
+  ctx.globalAlpha = 1;
+
+  // Subtle horizontal line at hit zone area
+  const grad = ctx.createLinearGradient(0, HIT_ZONE_Y - 40, 0, HIT_ZONE_Y + 40);
+  grad.addColorStop(0, "rgba(255,255,255,0)");
+  grad.addColorStop(0.5, "rgba(255,255,255,0.04)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, HIT_ZONE_Y - 40, CANVAS_W, 80);
+}
+
+// =============================================================================
+// DRAW: MENU SCREEN
+// =============================================================================
+function drawMenu() {
+  ctx.fillStyle = "#0a0a12";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Title
+  ctx.textAlign = "center";
+  ctx.font = "bold 36px monospace";
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = "#ff3355";
+  ctx.fillStyle = "#ff3355";
+  ctx.fillText("REAGAN'S", CANVAS_W / 2, 140);
+  ctx.shadowColor = "#00ccff";
+  ctx.fillStyle = "#00ccff";
+  ctx.fillText("RHYTHM RUMBLE", CANVAS_W / 2, 185);
+  ctx.shadowBlur = 0;
+
+  // Subtitle
+  ctx.font = "14px monospace";
+  ctx.fillStyle = "#666";
+  ctx.fillText("A Neon Drum Arcade", CANVAS_W / 2, 215);
+
+  // Drum kit decorative icons
+  const drumY = 255;
+  for (let i = 0; i < NUM_LANES; i++) {
+    const dx = CANVAS_W / 2 - 120 + i * 80;
+    ctx.beginPath();
+    ctx.arc(dx, drumY, 18, 0, Math.PI * 2);
+    ctx.strokeStyle = LANES[i].color;
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = LANES[i].color;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.font = "bold 12px monospace";
+    ctx.fillStyle = LANES[i].color;
+    ctx.fillText(LANES[i].label, dx, drumY + 5);
+    ctx.font = "9px monospace";
+    ctx.fillStyle = "#777";
+    ctx.fillText(LANES[i].name, dx, drumY + 30);
+  }
+
+  // Menu items
+  const startY = 320;
+  ctx.font = "16px monospace";
+  for (let i = 0; i < menuItems.length; i++) {
+    const selected = i === menuSelection;
+    const y = startY + i * 36;
+    if (selected) {
+      ctx.fillStyle = "#00ccff";
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "#00ccff";
+      ctx.fillText(`▶  ${menuItems[i]}  ◀`, CANVAS_W / 2, y);
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.fillStyle = "#555";
+      ctx.fillText(menuItems[i], CANVAS_W / 2, y);
+    }
+  }
+
+  // Controls hint
+  ctx.font = "11px monospace";
+  ctx.fillStyle = "#444";
+  ctx.fillText("↑/↓  SELECT     ENTER  START", CANVAS_W / 2, CANVAS_H - 60);
+  ctx.fillText("D  F  J  K  —  DRUM KEYS", CANVAS_W / 2, CANVAS_H - 40);
+
+  // Blinking prompt
+  if (Math.floor(performance.now() / 600) % 2) {
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "#ffdd00";
+    ctx.fillText("PRESS ENTER", CANVAS_W / 2, CANVAS_H - 95);
+  }
+}
+
+// =============================================================================
+// DRAW: RESULTS SCREEN
+// =============================================================================
+function drawResults() {
+  ctx.fillStyle = "rgba(10,10,18,0.95)";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  ctx.textAlign = "center";
+
+  // Header
+  ctx.font = "bold 32px monospace";
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = "#ffdd00";
+  ctx.fillStyle = "#ffdd00";
+  ctx.fillText("STAGE CLEAR!", CANVAS_W / 2, 120);
+  ctx.shadowBlur = 0;
+
+  // Score
+  ctx.font = "bold 48px monospace";
+  ctx.fillStyle = "#fff";
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "#00ccff";
+  ctx.fillText(String(score).padStart(7, "0"), CANVAS_W / 2, 200);
+  ctx.shadowBlur = 0;
+
+  // Stats
+  const stats = [
+    { label: "PERFECT", value: totalPerfect, color: "#fff" },
+    { label: "GOOD",    value: totalGood,    color: "#33ff66" },
+    { label: "MISS",    value: totalMiss,    color: "#ff4466" },
+    { label: "MAX COMBO", value: maxCombo,   color: "#ffdd00" },
+    { label: "BEST MULTI", value: `${multiplier}x`, color: "#ff8800" },
+  ];
+
+  ctx.font = "16px monospace";
+  const statY = 260;
+  for (let i = 0; i < stats.length; i++) {
+    const y = statY + i * 32;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#888";
+    ctx.fillText(stats[i].label, CANVAS_W / 2 - 10, y);
+    ctx.textAlign = "left";
+    ctx.fillStyle = stats[i].color;
+    ctx.fillText(String(stats[i].value), CANVAS_W / 2 + 10, y);
+  }
+
+  // Grade
+  const pct = songTotalNotes > 0 ? totalPerfect / songTotalNotes : 0;
+  let grade = "C";
+  if (totalMiss === 0 && totalGood === 0) grade = "S+";
+  else if (pct > 0.9) grade = "S";
+  else if (pct > 0.75) grade = "A";
+  else if (pct > 0.5) grade = "B";
+  ctx.font = "bold 64px monospace";
+  const gradeCol = grade.startsWith("S") ? "#ffdd00" : grade === "A" ? "#33ff66" : grade === "B" ? "#00ccff" : "#888";
+  ctx.fillStyle = gradeCol;
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = gradeCol;
+  ctx.textAlign = "center";
+  ctx.fillText(grade, CANVAS_W / 2, 490);
+  ctx.shadowBlur = 0;
+
+  // Prompt
+  ctx.font = "12px monospace";
+  ctx.fillStyle = "#555";
+  ctx.fillText("PRESS ENTER TO RETURN", CANVAS_W / 2, CANVAS_H - 50);
+}
+
+// =============================================================================
+// MAIN DRAW — Composites all layers
+// =============================================================================
+function draw() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  if (gameState === "menu")    { drawMenu();    return; }
+  if (gameState === "results") { drawResults();  return; }
+
+  // --- Gameplay ---
+  drawBackground();
+  drawLanes();
+  drawHitZone();
+  drawNotes();
+  drawParticles();
+  drawFloats();
+  drawHUD();
+}
+
+// =============================================================================
+// GAME LOOP — requestAnimationFrame at 60fps with delta time
+// =============================================================================
+function gameLoop(timestamp) {
+  if (!lastFrameTime) lastFrameTime = timestamp;
+  const dt = Math.min((timestamp - lastFrameTime) / 1000, 0.05); // Cap at 50ms
+  lastFrameTime = timestamp;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Kick off
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
