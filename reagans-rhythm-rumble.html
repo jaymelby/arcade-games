@@ -119,26 +119,74 @@ const DRUM_KITS = {
 /* =====================================================================
    SONG LIBRARY
    ===================================================================== */
+// Generates a notes array from bar/beat-position patterns.
+// bars: array of bars; each bar is an array of [beatPos, lane] pairs.
+// beatPos: position within the 4/4 bar (0.0–3.999); 0=beat1, 1=beat2 etc.; 0.5=&1, 1.5=&2 ...
+function mkNotes(bpm, bars) {
+  const beatMs = 60000 / bpm;
+  const out = [];
+  bars.forEach((bar, i) => {
+    bar.forEach(([pos, lane]) => {
+      out.push({ timeMs: Math.round(beatMs * (i * 4 + pos) + 500), lane });
+    });
+  });
+  return out.sort((a, b) => a.timeMs - b.timeMs);
+}
+
 const songLibrary = {
   basic_rock_groove: {
     title: "The Standard Rock Groove", bpm: 120, difficulty: 1, unlockStars: 0,
-    notes: [
-      {timeMs:500,lane:0},{timeMs:1000,lane:0},{timeMs:1000,lane:1},
-      {timeMs:1500,lane:0},{timeMs:2000,lane:0},{timeMs:2000,lane:1},
-      {timeMs:2500,lane:0},{timeMs:3000,lane:0},{timeMs:3000,lane:1},
-      {timeMs:3500,lane:0},{timeMs:3750,lane:2},{timeMs:3875,lane:2},{timeMs:4000,lane:3},
-    ],
+    notes: mkNotes(120, [
+      /* Bar 01 – Intro     */ [[0,3],[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 02             */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 03             */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 04 – Tom fill  */ [[0,0],[1,0],[1,1],[2,0],[2.5,2],[3,2],[3.75,2]],
+      /* Bar 05 – Crash+8ths*/ [[0,3],[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 06 – 8th hats  */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 07             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 08 – Fill      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,2],[3,2],[3.5,2]],
+      /* Bar 09 – Back down */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 10             */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 11             */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 12 – Tom fill  */ [[0,0],[1,0],[1,1],[2,2],[2.5,2],[3,2],[3.5,2]],
+      /* Bar 13 – Crash+8ths*/ [[0,3],[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 14 – 8th hats  */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 15 – Mix fill  */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,2],[2,2],[2.5,1],[3,2],[3.5,2]],
+      /* Bar 16 – 8th hats  */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 17 – Groove    */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 18 – Big fill  */ [[0,1],[0.5,2],[1,2],[1.5,2],[2,1],[2.5,2],[3,2],[3.5,2]],
+      /* Bar 19 – Groove    */ [[0,0],[1,0],[1,1],[2,0],[3,0],[3,1]],
+      /* Bar 20 – Outro     */ [[0,3],[0,0],[1,0],[1,1],[2,0],[2.5,2],[3,2],[3.75,2]],
+    ]),
   },
   reagans_challenge: {
     title: "Reagan's Double-Time Challenge", bpm: 150, difficulty: 2, unlockStars: 3,
-    notes: [
-      {timeMs:500,lane:0},{timeMs:750,lane:0},{timeMs:1000,lane:1},
-      {timeMs:1250,lane:0},{timeMs:1500,lane:0},{timeMs:1500,lane:1},
-      {timeMs:1750,lane:2},{timeMs:2000,lane:0},{timeMs:2000,lane:1},
-      {timeMs:2250,lane:0},{timeMs:2500,lane:2},{timeMs:2750,lane:0},
-      {timeMs:3000,lane:1},{timeMs:3000,lane:0},{timeMs:3250,lane:0},
-      {timeMs:3500,lane:2},{timeMs:3625,lane:2},{timeMs:3750,lane:1},{timeMs:4000,lane:3},
-    ],
+    notes: mkNotes(150, [
+      /* Bar 01 – Intro     */ [[0,3],[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 02             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 03             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 04 – Fill      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,2],[2,2],[2.5,2],[3,2],[3.5,3]],
+      /* Bar 05             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 06             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 07 – Busy      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,2],[3,0],[3,1],[3.5,2]],
+      /* Bar 08 – Tom run   */ [[0,2],[0.5,2],[1,2],[1.25,2],[1.5,1],[2,2],[2.5,2],[3,0],[3.5,2]],
+      /* Bar 09             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 10             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 11 – Busy      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,2],[2,0],[2.5,2],[3,0],[3,1],[3.5,2]],
+      /* Bar 12 – Fill      */ [[0,0],[0.5,2],[1,2],[1.5,2],[2,1],[2.5,2],[3,2],[3.5,3]],
+      /* Bar 13 – Crash     */ [[0,3],[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 14             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 15 – Busy      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,2],[3,0],[3,1],[3.5,2]],
+      /* Bar 16 – Fill      */ [[0,0],[0.5,0],[1,2],[1.5,2],[2,1],[2.5,2],[3,2],[3.5,0]],
+      /* Bar 17             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 18             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 19 – Busy      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,2],[2,0],[2.5,2],[3,0],[3,1],[3.5,2]],
+      /* Bar 20 – Tom run   */ [[0,2],[0.5,2],[1,2],[1.25,2],[1.5,1],[2,2],[2.5,2],[3,0],[3.5,2]],
+      /* Bar 21             */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,0],[2,0],[2.5,0],[3,0],[3,1],[3.5,0]],
+      /* Bar 22 – Busy      */ [[0,0],[0.5,0],[1,0],[1,1],[1.5,2],[2,0],[2.5,2],[3,0],[3,1],[3.5,2]],
+      /* Bar 23 – Fill      */ [[0,0],[0.5,0],[1,2],[1.5,2],[2,1],[2.5,2],[3,2],[3.5,2]],
+      /* Bar 24 – Finale    */ [[0,3],[0,2],[0.5,2],[1,2],[1.5,1],[2,2],[2.5,2],[3,1],[3.5,3]],
+    ]),
   },
 };
 
@@ -245,6 +293,20 @@ function playBassNote(freq, dur) {
   o.connect(f).connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+dur);
 }
 
+function playChordPad(freqs, dur) {
+  ensureAudio(); const t = audioCtx.currentTime;
+  for (const f of freqs) {
+    const o = audioCtx.createOscillator(); o.type = "triangle";
+    o.frequency.value = f;
+    const lp = audioCtx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 600;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(0.020, t + Math.min(dur * 0.08, 0.06));
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.88);
+    o.connect(lp).connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + dur);
+  }
+}
+
 /* =====================================================================
    GAME STATE
    ===================================================================== */
@@ -277,7 +339,7 @@ let ciTimer=0, ciBeat=0, ciTotal=4, ciBeatDur=0.5;
 
 // Health
 let hp=100;
-const HP_MAX=100, HP_DRAIN=12, HP_REGEN=2;
+const HP_MAX=100, HP_DRAIN=5, HP_REGEN=2;
 
 // Fever
 let feverMeter=0, feverOn=false, feverTimer=0;
@@ -286,9 +348,20 @@ const FEVER_NEED=20, FEVER_DUR=5.0, FEVER_MUL=2;
 // Random mode
 let rndTimer=0;
 
-// Background bass
+// Background music
 let bassT=0, bassI=0;
-const BASS=[65.4,0,82.4,0,73.4,0,98,65.4];
+// Per-song bass lines: frequency per 8th-note step (Hz), 0 = rest
+const SONG_BASS = {
+  basic_rock_groove: [196,0,196,0,147,0,147,0,131,0,131,0,147,0,196,0],
+  reagans_challenge: [220,0,220,220,164.8,0,220,0,220,0,164.8,0,146.8,0,196,0],
+  default:           [98, 0,131, 0,147, 0,131, 0, 98, 0,131, 0,164.8,0,131, 0],
+};
+// Per-song chord progressions [root, third, fifth] in Hz — one chord per 2 beats
+const SONG_CHORDS = {
+  basic_rock_groove: [[98,123.5,146.8],[65.4,82.4,98],[98,123.5,146.8],[73.4,92.5,110]],
+  reagans_challenge: [[110,130.8,164.8],[87.3,110,130.8],[110,130.8,164.8],[82.4,98,123.5]],
+  default:           [[98,130.8,164.8],[110,146.8,196],[82.4,110,146.8],[73.4,98,130.8]],
+};
 
 // Shake
 let shakeX=0, shakeY=0, shakeT=0;
@@ -678,10 +751,19 @@ function update(dt){
   // Fever
   if(feverOn){ feverTimer-=dt; if(feverTimer<=0){feverOn=false;feverMeter=0;} }
 
-  // Background bass
-  if(songMode){
-    bassT+=dt; const bbd=60/curBPM;
-    if(bassT>=bbd){ bassT-=bbd; const f=BASS[bassI%BASS.length]; if(f>0) playBassNote(f,bbd*0.8); bassI++; }
+  // Background music: bass line + chord pads (plays in all modes)
+  {
+    const bbd = 60 / curBPM * 0.5; // 8th-note step duration
+    const bassLine = SONG_BASS[curSongKey] || SONG_BASS.default;
+    const chords   = SONG_CHORDS[curSongKey] || SONG_CHORDS.default;
+    bassT += dt;
+    if (bassT >= bbd) {
+      bassT -= bbd;
+      const f = bassLine[bassI % bassLine.length];
+      if (f > 0) playBassNote(f, bbd * 0.85);
+      if (bassI % 4 === 0) playChordPad(chords[(bassI >> 2) % chords.length], bbd * 4.5);
+      bassI++;
+    }
   }
 
   // Spawn notes
