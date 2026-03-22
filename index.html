@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Melby Family Game Library</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --background: #F3F4F6;
+            --card-bg: #FFFFFF;
+            --text-main: #111827;
+            --text-muted: #6B7280;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            text-align: center;
+            padding: 4rem 1rem 2rem;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0;
+            color: var(--primary);
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+
+        p.subtitle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 1rem auto;
+        }
+
+        .game-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            width: 90%;
+            max-width: 1000px;
+            padding: 2rem 0;
+        }
+
+        .game-card {
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            text-decoration: none;
+            color: inherit;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .game-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border: 2px solid var(--primary);
+        }
+
+        .game-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .game-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin: 0 0 0.5rem 0;
+        }
+
+        .game-desc {
+            color: var(--text-muted);
+            font-size: 1rem;
+            margin: 0;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>🎮 Vibe Coding Arcade</h1>
+        <p class="subtitle">A collection of fun, home-built games by the Melby family. Click a card to play!</p>
+    </header>
+
+    <main class="game-grid" id="game-container">
+        </main>
+
+    <script>
+        // 🛠️ ADD YOUR GAMES HERE 🛠️
+        // Just add a new object to this array for each new game you build.
+        const games = [
+            {
+                title: "Luke's NYC Street Brawl",
+                description: "Step up to the plate... wait, no! Take back the alleyways and throw trash cans at incoming thugs!",
+                url: "luke-nyc-street-brawl.html", 
+                emoji: "🌆"
+            },            
+            {
+                title: "Reagan's Rhythm Rumble",
+                description: "Keep the beat, hit the drums on time, and rock the stage.",
+                url: "#", 
+                emoji: "🥁"
+            },
+            {
+                title: "Rex's Treat Hunt",
+                description: "Help Rex sniff out all the hidden bones in the backyard.",
+                url: "#", 
+                emoji: "🐕"
+            },
+            {
+                title: "Coming Soon...",
+                description: "Our next awesome AI-assisted game is currently under construction.",
+                url: "#", 
+                emoji: "🚀"
+            }
+        ];
+
+        // Function to render the games to the page
+        function loadGames() {
+            const container = document.getElementById('game-container');
+            
+            games.forEach(game => {
+                // Create the card link
+                const card = document.createElement('a');
+                card.href = game.url;
+                card.className = 'game-card';
+
+                // Construct the inner HTML
+                card.innerHTML = `
+                    <div class="game-icon">${game.emoji}</div>
+                    <h2 class="game-title">${game.title}</h2>
+                    <p class="game-desc">${game.description}</p>
+                `;
+
+                // Add to the grid
+                container.appendChild(card);
+            });
+        }
+
+        // Run the function when the page loads
+        window.onload = loadGames;
+    </script>
+
+</body>
+</html>
