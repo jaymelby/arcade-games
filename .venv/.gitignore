@@ -1,0 +1,5 @@
+# Ignore all files/folders in this virtual environment
+*
+
+# Keep this file tracked
+!.gitignore
