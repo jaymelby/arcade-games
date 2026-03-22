@@ -2,951 +2,1184 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Reagan's Rhythm Rumble</title>
 <style>
-/* =========================================================================
-   GLOBAL STYLES — Dark arcade aesthetic, centered canvas
-   ========================================================================= */
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
+html, body {
   background: #0a0a0f;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100vh;
-  overflow: hidden;
-  font-family: 'Segoe UI', 'Consolas', monospace;
+  display: flex; flex-direction: column;
+  justify-content: center; align-items: center;
+  height: 100vh; width: 100vw; overflow: hidden;
+  font-family: 'Segoe UI','Consolas',monospace;
+  touch-action: none; -webkit-user-select: none; user-select: none;
 }
-canvas {
-  display: block;
-  border: 2px solid #222;
-  border-radius: 6px;
-  /* Crisp pixel rendering */
-  image-rendering: auto;
+canvas { display: block; border: 2px solid #222; border-radius: 6px; }
+#touchPads {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0;
+  height: 22vh; pointer-events: auto; z-index: 100;
 }
+.touchPad {
+  position: absolute; top: 0; bottom: 0;
+  display: flex; justify-content: center; align-items: center;
+  font: bold 22px monospace; color: rgba(255,255,255,0.7);
+  border: 2px solid rgba(255,255,255,0.15); border-radius: 8px;
+  transition: background 0.08s;
+}
+.touchPad.active { background: rgba(255,255,255,0.18); }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="touchPads">
+  <div class="touchPad" id="tp0" style="left:0;width:25%"></div>
+  <div class="touchPad" id="tp1" style="left:25%;width:25%"></div>
+  <div class="touchPad" id="tp2" style="left:50%;width:25%"></div>
+  <div class="touchPad" id="tp3" style="left:75%;width:25%"></div>
+</div>
 <script>
 "use strict";
 
-// =============================================================================
-// CONFIGURATION — Tweak these constants to tune gameplay feel
-// =============================================================================
-
-// --- Canvas ---
-const CANVAS_W = 800;                 // Canvas width in pixels
-const CANVAS_H = 700;                 // Canvas height in pixels
-
-// --- Lane Layout ---
-const NUM_LANES    = 4;               // Number of drum lanes
-const LANE_WIDTH   = 100;             // Pixel width of each lane
-const LANE_GAP     = 20;              // Gap between lanes
+/* =====================================================================
+   CONFIGURATION
+   ===================================================================== */
+const CANVAS_W = 800, CANVAS_H = 700;
+const NUM_LANES = 4, LANE_WIDTH = 100, LANE_GAP = 20;
 const LANE_START_X = (CANVAS_W - (NUM_LANES * LANE_WIDTH + (NUM_LANES - 1) * LANE_GAP)) / 2;
-
-// --- Note Behaviour ---
-const NOTE_RADIUS  = 22;             // Radius of falling beat circles
-const NOTE_SPEED   = 280;            // Pixels per second (increase = faster)
-
-// --- Hit Zone ---
-const HIT_ZONE_Y      = CANVAS_H - 100; // Y position of the hit target line
-const PERFECT_WINDOW   = 25;          // Pixels from center for "PERFECT" (±)
-const GOOD_WINDOW      = 55;          // Pixels from center for "GOOD" (±)
-
-// --- Scoring ---
-const PERFECT_PTS = 100;
-const GOOD_PTS    = 50;
-
-// --- Combo Multiplier Thresholds ---
+const NOTE_RADIUS = 22, BASE_NOTE_SPEED = 280;
+const HIT_ZONE_Y = CANVAS_H - 100;
+const PERFECT_PTS = 100, GOOD_PTS = 50;
 const COMBO_TIERS = [
-  { threshold: 0,  multiplier: 1 },
-  { threshold: 5,  multiplier: 2 },
-  { threshold: 15, multiplier: 4 },
-  { threshold: 30, multiplier: 8 },
+  { threshold: 0, mul: 1 }, { threshold: 5, mul: 2 },
+  { threshold: 15, mul: 4 }, { threshold: 30, mul: 8 },
 ];
+const RANDOM_SPAWN_INTERVAL = 0.35, RANDOM_SPAWN_CHANCE = 0.55;
 
-// --- Note Spawn (Random mode) ---
-const RANDOM_SPAWN_INTERVAL = 0.35;  // Seconds between potential random spawns
-const RANDOM_SPAWN_CHANCE   = 0.55;  // Probability each interval spawns a note
+const DIFFICULTIES = {
+  easy:   { pw: 35, gw: 70, label: "EASY",   color: "#33ff66" },
+  normal: { pw: 25, gw: 55, label: "NORMAL", color: "#ffdd00" },
+  hard:   { pw: 15, gw: 38, label: "HARD",   color: "#ff3355" },
+};
 
-// --- Lane Definitions: key, label, drum colour, drum type ---
 const LANES = [
-  { key: "d", label: "D",  color: "#00ccff", glowColor: "#00ccff", drumType: "hihat",  name: "Hi-Hat" },
-  { key: "f", label: "F",  color: "#ff3355", glowColor: "#ff3355", drumType: "snare",  name: "Snare"  },
-  { key: "j", label: "J",  color: "#33ff66", glowColor: "#33ff66", drumType: "tom",    name: "Tom"    },
-  { key: "k", label: "K",  color: "#ffdd00", glowColor: "#ffdd00", drumType: "crash",  name: "Crash"  },
+  { key:"d", label:"D", color:"#00ccff", drumType:"hihat", name:"Hi-Hat" },
+  { key:"f", label:"F", color:"#ff3355", drumType:"snare", name:"Snare"  },
+  { key:"j", label:"J", color:"#33ff66", drumType:"tom",   name:"Tom"    },
+  { key:"k", label:"K", color:"#ffdd00", drumType:"crash", name:"Crash"  },
 ];
 
-// =============================================================================
-// SONG LIBRARY — Each song has { title, bpm, notes: [{ timeMs, lane }] }
-// Lane Guide: 0=Hi-Hat(D), 1=Snare(F), 2=Tom(J), 3=Crash(K)
-// Add new songs here — the engine converts timeMs → seconds automatically.
-// =============================================================================
+const THEMES = {
+  neon:      { bg:"#0a0a12", a1:"#ff3355", a2:"#00ccff", name:"Neon" },
+  synthwave: { bg:"#1a0a20", a1:"#ff44aa", a2:"#aa44ff", name:"Synthwave" },
+  matrix:    { bg:"#000a00", a1:"#00ff44", a2:"#44ff88", name:"Matrix" },
+  classic:   { bg:"#0a0a0a", a1:"#ffaa00", a2:"#ff6600", name:"Classic Arcade" },
+};
 
+/* =====================================================================
+   DRUM KIT DEFINITIONS
+   ===================================================================== */
+const DRUM_KITS = {
+  standard: {
+    name: "Standard Rock",
+    hihat:{ fType:"highpass", fFreq:7000, dur:0.08, gain:0.35 },
+    snare:{ nFreq:3000, nQ:1.0, nDur:0.15, nGain:0.50, bWave:"triangle", bFS:180, bFE:80, bGain:0.45 },
+    tom:  { wave:"sine", fS:150, fE:50, dur:0.25, gain:0.55 },
+    crash:{ fFreq:5000, fQ:0.5, dur:0.50, gain:0.40 },
+  },
+  electronic: {
+    name: "Electronic",
+    hihat:{ fType:"highpass", fFreq:9000, dur:0.04, gain:0.30 },
+    snare:{ nFreq:4500, nQ:2.0, nDur:0.10, nGain:0.45, bWave:"square", bFS:220, bFE:100, bGain:0.35 },
+    tom:  { wave:"sine", fS:200, fE:40, dur:0.30, gain:0.50 },
+    crash:{ fFreq:6000, fQ:0.3, dur:0.35, gain:0.35 },
+  },
+  jazz: {
+    name: "Jazz Brush",
+    hihat:{ fType:"highpass", fFreq:5000, dur:0.12, gain:0.20 },
+    snare:{ nFreq:2000, nQ:0.6, nDur:0.20, nGain:0.30, bWave:"sine", bFS:140, bFE:70, bGain:0.25 },
+    tom:  { wave:"sine", fS:120, fE:45, dur:0.35, gain:0.40 },
+    crash:{ fFreq:3500, fQ:0.8, dur:0.70, gain:0.25 },
+  },
+  heavy: {
+    name: "Heavy Metal",
+    hihat:{ fType:"highpass", fFreq:8000, dur:0.05, gain:0.40 },
+    snare:{ nFreq:3500, nQ:1.5, nDur:0.12, nGain:0.60, bWave:"sawtooth", bFS:250, bFE:90, bGain:0.50 },
+    tom:  { wave:"triangle", fS:180, fE:35, dur:0.20, gain:0.65 },
+    crash:{ fFreq:5500, fQ:0.4, dur:0.55, gain:0.50 },
+  },
+  trap808: {
+    name: "808 Trap",
+    hihat:{ fType:"highpass", fFreq:10000, dur:0.03, gain:0.30 },
+    snare:{ nFreq:4000, nQ:1.8, nDur:0.08, nGain:0.40, bWave:"sine", bFS:300, bFE:120, bGain:0.55 },
+    tom:  { wave:"sine", fS:80, fE:25, dur:0.50, gain:0.70 },
+    crash:{ fFreq:7000, fQ:0.3, dur:0.30, gain:0.35 },
+  },
+};
+
+/* =====================================================================
+   SONG LIBRARY
+   ===================================================================== */
 const songLibrary = {
-  "basic_rock_groove": {
-    title: "The Standard Rock Groove",
-    bpm: 120,
+  basic_rock_groove: {
+    title: "The Standard Rock Groove", bpm: 120, difficulty: 1, unlockStars: 0,
     notes: [
-      // Measure 1 — basic "boom-bap"
-      { timeMs: 500,  lane: 0 },
-      { timeMs: 1000, lane: 0 },
-      { timeMs: 1000, lane: 1 },
-      { timeMs: 1500, lane: 0 },
-      { timeMs: 2000, lane: 0 },
-      { timeMs: 2000, lane: 1 },
-      // Measure 2 — adding flair
-      { timeMs: 2500, lane: 0 },
-      { timeMs: 3000, lane: 0 },
-      { timeMs: 3000, lane: 1 },
-      { timeMs: 3500, lane: 0 },
-      // Measure 2 ending — Tom fill into Crash
-      { timeMs: 3750, lane: 2 },
-      { timeMs: 3875, lane: 2 },
-      { timeMs: 4000, lane: 3 },
+      {timeMs:500,lane:0},{timeMs:1000,lane:0},{timeMs:1000,lane:1},
+      {timeMs:1500,lane:0},{timeMs:2000,lane:0},{timeMs:2000,lane:1},
+      {timeMs:2500,lane:0},{timeMs:3000,lane:0},{timeMs:3000,lane:1},
+      {timeMs:3500,lane:0},{timeMs:3750,lane:2},{timeMs:3875,lane:2},{timeMs:4000,lane:3},
     ],
   },
-  "reagans_challenge": {
-    title: "Reagan's Double-Time Challenge",
-    bpm: 150,
+  reagans_challenge: {
+    title: "Reagan's Double-Time Challenge", bpm: 150, difficulty: 2, unlockStars: 3,
     notes: [
-      { timeMs: 500,  lane: 0 },
-      { timeMs: 750,  lane: 0 },
-      { timeMs: 1000, lane: 1 },
-      { timeMs: 1250, lane: 0 },
-      { timeMs: 1500, lane: 0 },
-      { timeMs: 1500, lane: 1 },
-      { timeMs: 1750, lane: 2 },
-      { timeMs: 2000, lane: 0 },
-      { timeMs: 2000, lane: 1 },
-      { timeMs: 2250, lane: 0 },
-      { timeMs: 2500, lane: 2 },
-      { timeMs: 2750, lane: 0 },
-      { timeMs: 3000, lane: 1 },
-      { timeMs: 3000, lane: 0 },
-      { timeMs: 3250, lane: 0 },
-      { timeMs: 3500, lane: 2 },
-      { timeMs: 3625, lane: 2 },
-      { timeMs: 3750, lane: 1 },
-      { timeMs: 4000, lane: 3 },
+      {timeMs:500,lane:0},{timeMs:750,lane:0},{timeMs:1000,lane:1},
+      {timeMs:1250,lane:0},{timeMs:1500,lane:0},{timeMs:1500,lane:1},
+      {timeMs:1750,lane:2},{timeMs:2000,lane:0},{timeMs:2000,lane:1},
+      {timeMs:2250,lane:0},{timeMs:2500,lane:2},{timeMs:2750,lane:0},
+      {timeMs:3000,lane:1},{timeMs:3000,lane:0},{timeMs:3250,lane:0},
+      {timeMs:3500,lane:2},{timeMs:3625,lane:2},{timeMs:3750,lane:1},{timeMs:4000,lane:3},
     ],
   },
 };
 
-// --- Convert songLibrary (timeMs) → engine-ready SONGS array (time in seconds) ---
-const SONGS = Object.values(songLibrary).map(song => ({
-  title: song.title,
-  bpm:   song.bpm,
-  notes: song.notes
-    .map(n => ({ time: n.timeMs / 1000, lane: n.lane }))
-    .sort((a, b) => a.time - b.time),
+// Convert to engine format
+const SONGS = Object.entries(songLibrary).map(([key, s]) => ({
+  key, title: s.title, bpm: s.bpm,
+  difficulty: s.difficulty || 1, unlockStars: s.unlockStars || 0,
+  notes: s.notes.map(n => ({ time: n.timeMs / 1000, lane: n.lane })).sort((a,b) => a.time - b.time),
 }));
 
-// =============================================================================
-// CANVAS SETUP
-// =============================================================================
+/* =====================================================================
+   PERSISTENT SETTINGS (localStorage)
+   ===================================================================== */
+const SAVE_KEY = "rrr_save";
+let settings = {
+  difficulty: "normal", drumKit: "standard", theme: "neon",
+  touchEnabled: false, latencyMs: 0,
+  highScores: {}, starsEarned: {},
+};
+function loadSettings() {
+  try { const r = localStorage.getItem(SAVE_KEY); if (r) Object.assign(settings, JSON.parse(r)); } catch(e) {}
+}
+function saveSettings() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(settings)); } catch(e) {}
+}
+loadSettings();
+
+/* =====================================================================
+   CANVAS
+   ===================================================================== */
 const canvas = document.getElementById("game");
-const ctx    = canvas.getContext("2d");
-canvas.width  = CANVAS_W;
-canvas.height = CANVAS_H;
+const ctx = canvas.getContext("2d");
+canvas.width = CANVAS_W; canvas.height = CANVAS_H;
 
-// =============================================================================
-// WEB AUDIO — Synthesize 4 distinct drum sounds, no external files needed
-// =============================================================================
+/* =====================================================================
+   WEB AUDIO — Kit-driven drum synthesis
+   ===================================================================== */
 let audioCtx = null;
-
-/** Lazily create AudioContext on first user interaction (browser policy). */
 function ensureAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
+function noiseBuf(dur) {
+  const n = audioCtx.sampleRate * dur | 0;
+  const b = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+function vary(v, p) { return v * (1 + (Math.random() - 0.5) * 2 * (p || 0.05)); }
 
-/**
- * Play a synthesized drum hit.
- * @param {"hihat"|"snare"|"tom"|"crash"} type — Which drum to trigger.
- */
 function playDrum(type) {
   ensureAudio();
+  const kit = DRUM_KITS[settings.drumKit] || DRUM_KITS.standard;
   const t = audioCtx.currentTime;
-
-  switch (type) {
-    // -----------------------------------------------------------------------
-    // HI-HAT — Short burst of filtered noise
-    // -----------------------------------------------------------------------
-    case "hihat": {
-      const dur = 0.08;
-      const bufSize = audioCtx.sampleRate * dur;
-      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf;
-      // High-pass filter for that metallic "tss" character
-      const hp = audioCtx.createBiquadFilter();
-      hp.type = "highpass"; hp.frequency.value = 7000;
-      const gain = audioCtx.createGain();
-      gain.gain.setValueAtTime(0.35, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      src.connect(hp).connect(gain).connect(audioCtx.destination);
-      src.start(t); src.stop(t + dur);
-      break;
-    }
-    // -----------------------------------------------------------------------
-    // SNARE — Noise burst + low sine body
-    // -----------------------------------------------------------------------
-    case "snare": {
-      const dur = 0.15;
-      // Noise component
-      const bufSize = audioCtx.sampleRate * dur;
-      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-      const noiseSrc = audioCtx.createBufferSource();
-      noiseSrc.buffer = buf;
-      const bp = audioCtx.createBiquadFilter();
-      bp.type = "bandpass"; bp.frequency.value = 3000; bp.Q.value = 1.0;
-      const noiseGain = audioCtx.createGain();
-      noiseGain.gain.setValueAtTime(0.5, t);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      noiseSrc.connect(bp).connect(noiseGain).connect(audioCtx.destination);
-      noiseSrc.start(t); noiseSrc.stop(t + dur);
-      // Body sine
-      const osc = audioCtx.createOscillator();
-      osc.type = "triangle"; osc.frequency.setValueAtTime(180, t);
-      osc.frequency.exponentialRampToValueAtTime(80, t + dur);
-      const oscGain = audioCtx.createGain();
-      oscGain.gain.setValueAtTime(0.45, t);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      osc.connect(oscGain).connect(audioCtx.destination);
-      osc.start(t); osc.stop(t + dur);
-      break;
-    }
-    // -----------------------------------------------------------------------
-    // TOM — Deep sine wave with pitch bend
-    // -----------------------------------------------------------------------
-    case "tom": {
-      const dur = 0.25;
-      const osc = audioCtx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(150, t);
-      osc.frequency.exponentialRampToValueAtTime(50, t + dur);
-      const gain = audioCtx.createGain();
-      gain.gain.setValueAtTime(0.55, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      osc.connect(gain).connect(audioCtx.destination);
-      osc.start(t); osc.stop(t + dur);
-      break;
-    }
-    // -----------------------------------------------------------------------
-    // CRASH — Long noise burst with shimmer
-    // -----------------------------------------------------------------------
-    case "crash": {
-      const dur = 0.5;
-      const bufSize = audioCtx.sampleRate * dur;
-      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf;
-      const bp = audioCtx.createBiquadFilter();
-      bp.type = "bandpass"; bp.frequency.value = 5000; bp.Q.value = 0.5;
-      const gain = audioCtx.createGain();
-      gain.gain.setValueAtTime(0.4, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      src.connect(bp).connect(gain).connect(audioCtx.destination);
-      src.start(t); src.stop(t + dur);
-      break;
-    }
+  if (type === "hihat") {
+    const c = kit.hihat, dur = vary(c.dur);
+    const s = audioCtx.createBufferSource(); s.buffer = noiseBuf(dur);
+    const f = audioCtx.createBiquadFilter(); f.type = c.fType; f.frequency.value = vary(c.fFreq);
+    const g = audioCtx.createGain(); g.gain.setValueAtTime(vary(c.gain,0.1),t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    s.connect(f).connect(g).connect(audioCtx.destination); s.start(t); s.stop(t+dur);
+  } else if (type === "snare") {
+    const c = kit.snare, dur = vary(c.nDur);
+    const ns = audioCtx.createBufferSource(); ns.buffer = noiseBuf(dur);
+    const bp = audioCtx.createBiquadFilter(); bp.type="bandpass"; bp.frequency.value=vary(c.nFreq); bp.Q.value=c.nQ;
+    const ng = audioCtx.createGain(); ng.gain.setValueAtTime(vary(c.nGain,0.1),t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    ns.connect(bp).connect(ng).connect(audioCtx.destination); ns.start(t); ns.stop(t+dur);
+    const o = audioCtx.createOscillator(); o.type=c.bWave;
+    o.frequency.setValueAtTime(vary(c.bFS),t); o.frequency.exponentialRampToValueAtTime(c.bFE, t+dur);
+    const og = audioCtx.createGain(); og.gain.setValueAtTime(vary(c.bGain,0.1),t);
+    og.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.connect(og).connect(audioCtx.destination); o.start(t); o.stop(t+dur);
+  } else if (type === "tom") {
+    const c = kit.tom, dur = vary(c.dur);
+    const o = audioCtx.createOscillator(); o.type=c.wave;
+    o.frequency.setValueAtTime(vary(c.fS),t); o.frequency.exponentialRampToValueAtTime(c.fE, t+dur);
+    const g = audioCtx.createGain(); g.gain.setValueAtTime(vary(c.gain,0.1),t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+dur);
+  } else if (type === "crash") {
+    const c = kit.crash, dur = vary(c.dur);
+    const s = audioCtx.createBufferSource(); s.buffer = noiseBuf(dur);
+    const bp = audioCtx.createBiquadFilter(); bp.type="bandpass"; bp.frequency.value=vary(c.fFreq); bp.Q.value=c.fQ;
+    const g = audioCtx.createGain(); g.gain.setValueAtTime(vary(c.gain,0.1),t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    s.connect(bp).connect(g).connect(audioCtx.destination); s.start(t); s.stop(t+dur);
   }
 }
 
-// =============================================================================
-// GAME STATE
-// =============================================================================
-
-// Possible game states: "menu", "playing", "results"
-let gameState    = "menu";
-let menuSelection = 0; // 0 = random, 1..N = song index
-const menuItems  = ["Random Mode", ...SONGS.map(s => s.title)];
-
-let score        = 0;
-let combo        = 0;
-let maxCombo     = 0;
-let multiplier   = 1;
-let totalPerfect = 0;
-let totalGood    = 0;
-let totalMiss    = 0;
-
-// Active notes on screen: { lane, y, hit (bool), missed (bool) }
-let notes        = [];
-// Floating text popups: { text, x, y, alpha, color, scale }
-let floats       = [];
-// Particles: { x, y, vx, vy, life, maxLife, color, radius }
-let particles    = [];
-// Per-lane flash timers (seconds remaining)
-let laneFlash    = [0, 0, 0, 0];
-
-// Song mode state
-let songMode       = false;
-let songNotes      = [];       // Sorted array of { time, lane }
-let songNextIdx    = 0;        // Next note to spawn
-let songStartTime  = 0;        // performance.now() when song started
-let songTotalNotes = 0;
-let songFinished   = false;
-let songEndTimer   = 0;        // Delay after last note before showing results
-
-// Random mode state
-let randomSpawnTimer = 0;
-
-// Timing
-let lastFrameTime = 0;
-
-// =============================================================================
-// HELPER — Get lane center X
-// =============================================================================
-function laneCenterX(lane) {
-  return LANE_START_X + lane * (LANE_WIDTH + LANE_GAP) + LANE_WIDTH / 2;
+function playTick(accent) {
+  ensureAudio(); const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(); o.type="sine"; o.frequency.value = accent ? 1200 : 800;
+  const g = audioCtx.createGain(); g.gain.setValueAtTime(0.3,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
+  o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.06);
 }
 
-// =============================================================================
-// FLOATING TEXT — Spawn feedback messages that drift upward and fade
-// =============================================================================
-function spawnFloat(text, x, y, color) {
-  floats.push({
-    text, x, y, alpha: 1.0, color,
-    scale: 1.5, // Start slightly large, shrinks to 1
-    vy: -80,     // Drift speed (pixels/sec, upward)
-  });
+function playBassNote(freq, dur) {
+  ensureAudio(); const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(); o.type="sawtooth"; o.frequency.value=freq;
+  const f = audioCtx.createBiquadFilter(); f.type="lowpass"; f.frequency.value=400;
+  const g = audioCtx.createGain(); g.gain.setValueAtTime(0.12,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.connect(f).connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+dur);
 }
 
-// =============================================================================
-// PARTICLE SYSTEM — Burst of glowing dots on Perfect hits
-// =============================================================================
-function spawnParticles(x, y, color, count = 18) {
-  for (let i = 0; i < count; i++) {
-    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.4;
-    const speed = 120 + Math.random() * 180;
-    particles.push({
-      x, y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      life: 0.5 + Math.random() * 0.3,
-      maxLife: 0.8,
-      color,
-      radius: 2 + Math.random() * 3,
-    });
-  }
+/* =====================================================================
+   GAME STATE
+   ===================================================================== */
+let gameState = "menu", lastFrameTime = 0, gameTime = 0;
+let menuSel = 0;
+const MAIN_MENU = ["Play Songs","Random Mode","Song Editor","Settings"];
+
+// Song select
+let songSelIdx = 0;
+
+// Settings
+let settIdx = 0;
+const SETT_ITEMS = ["Difficulty","Drum Kit","Theme","Touch Controls","Calibrate Latency","Import Song JSON","Back"];
+
+// Gameplay
+let score=0, combo=0, maxCombo=0, multiplier=1;
+let totalPerfect=0, totalGood=0, totalMiss=0;
+let notes=[], floats=[], particles=[], ripples=[];
+let laneFlash=[0,0,0,0];
+let PW=25, GW=55; // perfect/good windows
+
+// Song mode
+let songMode=false, songNotes=[], songNextIdx=0;
+let songStartTime=0, songTotalNotes=0, songFinished=false, songEndTimer=0;
+let curBPM=120, curSongKey="";
+let noteSpeed=BASE_NOTE_SPEED;
+
+// Count-in
+let ciTimer=0, ciBeat=0, ciTotal=4, ciBeatDur=0.5;
+
+// Health
+let hp=100;
+const HP_MAX=100, HP_DRAIN=12, HP_REGEN=2;
+
+// Fever
+let feverMeter=0, feverOn=false, feverTimer=0;
+const FEVER_NEED=20, FEVER_DUR=5.0, FEVER_MUL=2;
+
+// Random mode
+let rndTimer=0;
+
+// Background bass
+let bassT=0, bassI=0;
+const BASS=[65.4,0,82.4,0,73.4,0,98,65.4];
+
+// Shake
+let shakeX=0, shakeY=0, shakeT=0;
+
+// EQ bars
+let eq = new Array(20).fill(0);
+
+// Editor
+let edNotes=[], edBPM=120, edTitle="My Song", edRecording=false, edRecStart=0;
+
+// Calibration
+let calTaps=[], calBeatT=0, calBeatN=0, calInterval=0.5, calPhase="waiting", calStart=0;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+function lcx(lane) { return LANE_START_X + lane*(LANE_WIDTH+LANE_GAP) + LANE_WIDTH/2; }
+function applyDiff() { const d=DIFFICULTIES[settings.difficulty]||DIFFICULTIES.normal; PW=d.pw; GW=d.gw; }
+applyDiff();
+function theme() { return THEMES[settings.theme]||THEMES.neon; }
+function totalStars() { let s=0; for(const v of Object.values(settings.starsEarned||{})) s+=v; return s; }
+function songUnlocked(s) { return totalStars() >= (s.unlockStars||0); }
+function calcStars(p,g,m,t) {
+  if(t===0) return 0;
+  const pct=(p*100+g*50)/(t*100);
+  if(m===0&&g===0) return 5;
+  if(pct>=0.95) return 5; if(pct>=0.85) return 4;
+  if(pct>=0.70) return 3; if(pct>=0.50) return 2; return 1;
 }
 
-// =============================================================================
-// COMBO — Recalculate multiplier from current combo count
-// =============================================================================
-function updateMultiplier() {
-  multiplier = 1;
-  for (const tier of COMBO_TIERS) {
-    if (combo >= tier.threshold) multiplier = tier.multiplier;
+function spawnFloat(text,x,y,color) { floats.push({text,x,y,a:1,color,sc:1.5,vy:-80}); }
+function spawnParticles(x,y,col,n) {
+  n = n||18;
+  for(let i=0;i<n;i++){
+    const ang=(Math.PI*2*i)/n+(Math.random()-0.5)*0.4;
+    const spd=120+Math.random()*180;
+    particles.push({x,y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,
+      life:0.5+Math.random()*0.3,ml:0.8,color:col,r:2+Math.random()*3});
   }
 }
+function spawnRipple(x,y,col) { ripples.push({x,y,radius:NOTE_RADIUS,mr:NOTE_RADIUS+50,a:0.8,color:col}); }
+function trigShake(int,dur) { shakeT=dur; shakeX=(Math.random()-0.5)*int*2; shakeY=(Math.random()-0.5)*int*2; }
 
-// =============================================================================
-// INPUT HANDLING
-// =============================================================================
-const keysDown = {};
+function updateMul() { multiplier=1; for(const t of COMBO_TIERS) if(combo>=t.threshold) multiplier=t.mul; }
+function effMul() { return feverOn ? multiplier*FEVER_MUL : multiplier; }
 
-document.addEventListener("keydown", (e) => {
-  const key = e.key.toLowerCase();
-  if (keysDown[key]) return; // Ignore held keys
-  keysDown[key] = true;
+/* =====================================================================
+   HIT PROCESSING
+   ===================================================================== */
+function processHit(li) {
+  if(gameState==="calibration"){ handleCalTap(); return; }
+  if(gameState!=="playing"&&gameState!=="countdown") return;
+  ensureAudio(); playDrum(LANES[li].drumType); laneFlash[li]=0.15;
+  if(gameState==="countdown") return;
+  if(edRecording){ edNotes.push({timeMs:Math.round((performance.now()/1000-edRecStart)*1000),lane:li}); return; }
 
-  // --- Menu navigation ---
-  if (gameState === "menu") {
-    if (key === "arrowup" || key === "w") {
-      menuSelection = (menuSelection - 1 + menuItems.length) % menuItems.length;
-    } else if (key === "arrowdown" || key === "s") {
-      menuSelection = (menuSelection + 1) % menuItems.length;
-    } else if (key === "enter" || key === " ") {
-      startGame(menuSelection);
-    }
-    return;
+  let best=null, bestD=Infinity;
+  for(const n of notes){
+    if(n.lane!==li||n.hit||n.missed) continue;
+    const d=Math.abs(n.y-HIT_ZONE_Y);
+    if(d<GW&&d<bestD){ bestD=d; best=n; }
   }
-
-  // --- Results screen ---
-  if (gameState === "results") {
-    if (key === "enter" || key === " " || key === "escape") {
-      gameState = "menu";
-    }
-    return;
-  }
-
-  // --- Gameplay: check lane keys ---
-  const laneIdx = LANES.findIndex(l => l.key === key);
-  if (laneIdx === -1) return;
-
-  ensureAudio();
-  playDrum(LANES[laneIdx].drumType);
-  laneFlash[laneIdx] = 0.15; // Flash the lane for 150ms
-
-  // Find the closest unhit note in this lane within GOOD_WINDOW
-  let bestNote = null;
-  let bestDist = Infinity;
-  for (const note of notes) {
-    if (note.lane !== laneIdx || note.hit || note.missed) continue;
-    const dist = Math.abs(note.y - HIT_ZONE_Y);
-    if (dist < GOOD_WINDOW && dist < bestDist) {
-      bestDist = dist;
-      bestNote = note;
-    }
-  }
-
-  const cx = laneCenterX(laneIdx);
-  const col = LANES[laneIdx].color;
-
-  if (bestNote) {
-    bestNote.hit = true;
-    if (bestDist <= PERFECT_WINDOW) {
-      // PERFECT hit
-      combo++;
-      totalPerfect++;
-      updateMultiplier();
-      score += PERFECT_PTS * multiplier;
-      spawnFloat("PERFECT!", cx, HIT_ZONE_Y - 30, "#fff");
-      spawnParticles(cx, HIT_ZONE_Y, col, 22);
-    } else {
-      // GOOD hit
-      combo++;
-      totalGood++;
-      updateMultiplier();
-      score += GOOD_PTS * multiplier;
-      spawnFloat("GOOD", cx, HIT_ZONE_Y - 30, col);
-      spawnParticles(cx, HIT_ZONE_Y, col, 8);
-    }
-    if (combo > maxCombo) maxCombo = combo;
-  } else {
-    // Wrong timing — miss
-    combo = 0;
-    totalMiss++;
-    updateMultiplier();
-    spawnFloat("MISS", cx, HIT_ZONE_Y - 30, "#ff4466");
-  }
-});
-
-document.addEventListener("keyup", (e) => {
-  keysDown[e.key.toLowerCase()] = false;
-});
-
-// =============================================================================
-// START GAME — Reset state, choose random or song mode
-// =============================================================================
-function startGame(selection) {
-  score = 0; combo = 0; maxCombo = 0; multiplier = 1;
-  totalPerfect = 0; totalGood = 0; totalMiss = 0;
-  notes = []; floats = []; particles = [];
-  laneFlash = [0, 0, 0, 0];
-  randomSpawnTimer = 0;
-  songFinished = false;
-  songEndTimer = 0;
-
-  if (selection === 0) {
-    // Random mode
-    songMode = false;
-  } else {
-    // Song mode
-    songMode = true;
-    const song = SONGS[selection - 1];
-    songNotes = song.notes.map(n => ({ ...n }));
-    songNextIdx = 0;
-    songTotalNotes = songNotes.length;
-    // Calculate how long a note takes to fall to the hit zone
-    const fallTime = HIT_ZONE_Y / NOTE_SPEED;
-    songStartTime = performance.now() / 1000 + 1.5; // 1.5s lead-in
-  }
-
-  gameState = "playing";
-}
-
-// =============================================================================
-// UPDATE — Main game logic tick
-// =============================================================================
-function update(dt) {
-  if (gameState !== "playing") return;
-
-  const now = performance.now() / 1000;
-
-  // --- Spawn Notes ---
-  if (songMode) {
-    // Song mode: spawn notes based on song timeline
-    const fallTime = HIT_ZONE_Y / NOTE_SPEED;
-    const songTime = now - songStartTime;
-    while (songNextIdx < songNotes.length) {
-      const sn = songNotes[songNextIdx];
-      // Spawn early enough that the note reaches hit zone at sn.time
-      if (songTime >= sn.time - fallTime) {
-        notes.push({ lane: sn.lane, y: -NOTE_RADIUS, hit: false, missed: false });
-        songNextIdx++;
-      } else {
-        break;
+  const cx=lcx(li), col=LANES[li].color;
+  if(best){
+    best.hit=true; spawnRipple(cx,HIT_ZONE_Y,col);
+    if(bestD<=PW){
+      combo++; totalPerfect++; updateMul();
+      score+=PERFECT_PTS*effMul();
+      spawnFloat("PERFECT!",cx,HIT_ZONE_Y-30,"#fff");
+      spawnParticles(cx,HIT_ZONE_Y,col,22);
+      hp=Math.min(HP_MAX,hp+HP_REGEN);
+      feverMeter=Math.min(FEVER_NEED,feverMeter+1);
+      if(feverMeter>=FEVER_NEED&&!feverOn){
+        feverOn=true; feverTimer=FEVER_DUR;
+        spawnFloat("\u2605 FEVER! \u2605",CANVAS_W/2,CANVAS_H/2-50,"#ffdd00");
+        trigShake(6,0.3);
       }
+      eq[Math.random()*eq.length|0]=1;
+    } else {
+      combo++; totalGood++; updateMul();
+      score+=GOOD_PTS*effMul();
+      spawnFloat("GOOD",cx,HIT_ZONE_Y-30,col);
+      spawnParticles(cx,HIT_ZONE_Y,col,8);
+      hp=Math.min(HP_MAX,hp+HP_REGEN*0.5);
+      eq[Math.random()*eq.length|0]=0.5;
     }
-    // Check if song is done (all notes spawned and cleared)
-    if (songNextIdx >= songNotes.length && notes.every(n => n.hit || n.missed || n.y > CANVAS_H + 50)) {
-      songEndTimer += dt;
-      if (songEndTimer > 2.0) {
-        songFinished = true;
-        gameState = "results";
+    if(combo>maxCombo) maxCombo=combo;
+  } else {
+    combo=0; totalMiss++; updateMul();
+    feverMeter=Math.max(0,feverMeter-2);
+    hp=Math.max(0,hp-HP_DRAIN*0.5);
+    spawnFloat("MISS",cx,HIT_ZONE_Y-30,"#ff4466");
+    trigShake(3,0.1);
+  }
+}
+
+/* =====================================================================
+   INPUT: KEYBOARD
+   ===================================================================== */
+const keysDown={};
+document.addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  if(keysDown[k]) return; keysDown[k]=true;
+
+  if(gameState==="menu"){
+    if(k==="arrowup"||k==="w") menuSel=(menuSel-1+MAIN_MENU.length)%MAIN_MENU.length;
+    else if(k==="arrowdown"||k==="s") menuSel=(menuSel+1)%MAIN_MENU.length;
+    else if(k==="enter"||k===" "){
+      if(menuSel===0){ gameState="songSelect"; songSelIdx=0; }
+      else if(menuSel===1) startGame(-1);
+      else if(menuSel===2) enterEditor();
+      else if(menuSel===3){ gameState="settings"; settIdx=0; }
+    }
+    return;
+  }
+  if(gameState==="songSelect"){
+    if(k==="arrowup"||k==="w") songSelIdx=(songSelIdx-1+SONGS.length)%SONGS.length;
+    else if(k==="arrowdown"||k==="s") songSelIdx=(songSelIdx+1)%SONGS.length;
+    else if(k==="enter"||k===" "){ if(songUnlocked(SONGS[songSelIdx])) startGame(songSelIdx); }
+    else if(k==="escape") gameState="menu";
+    return;
+  }
+  if(gameState==="settings"){
+    if(k==="arrowup"||k==="w") settIdx=(settIdx-1+SETT_ITEMS.length)%SETT_ITEMS.length;
+    else if(k==="arrowdown"||k==="s") settIdx=(settIdx+1)%SETT_ITEMS.length;
+    else if(k==="enter"||k===" "||k==="arrowright") settAction(1);
+    else if(k==="arrowleft") settAction(-1);
+    else if(k==="escape"){ saveSettings(); gameState="menu"; }
+    return;
+  }
+  if(gameState==="calibration"){
+    if(k==="escape"){ gameState="settings"; return; }
+    if(k===" "||k==="enter"||LANES.some(l=>l.key===k)) handleCalTap();
+    return;
+  }
+  if(gameState==="results"){ if(k==="enter"||k===" "||k==="escape") gameState="songSelect"; return; }
+  if(gameState==="editor"){ editorKey(k); return; }
+  if(k==="escape"){ gameState="songSelect"; return; }
+  const li=LANES.findIndex(l=>l.key===k);
+  if(li!==-1) processHit(li);
+});
+document.addEventListener("keyup",e=>{ keysDown[e.key.toLowerCase()]=false; });
+
+/* =====================================================================
+   INPUT: TOUCH
+   ===================================================================== */
+const tpEl=document.getElementById("touchPads");
+function setupTouch(){
+  if(settings.touchEnabled||("ontouchstart" in window)){
+    settings.touchEnabled=true; tpEl.style.display="block";
+    for(let i=0;i<NUM_LANES;i++){
+      const pad=document.getElementById("tp"+i);
+      pad.textContent=LANES[i].label; pad.style.color=LANES[i].color;
+      pad.style.borderColor=LANES[i].color+"44";
+      pad.addEventListener("touchstart",e=>{ e.preventDefault(); pad.classList.add("active"); processHit(i); },{passive:false});
+      pad.addEventListener("touchend",e=>{ e.preventDefault(); pad.classList.remove("active"); },{passive:false});
+    }
+    canvas.addEventListener("touchstart",e=>{
+      e.preventDefault();
+      const rect=canvas.getBoundingClientRect();
+      const x=(e.touches[0].clientX-rect.left)/rect.width*CANVAS_W;
+      const y=(e.touches[0].clientY-rect.top)/rect.height*CANVAS_H;
+      menuTouch(x,y);
+    },{passive:false});
+  } else { tpEl.style.display="none"; }
+}
+function menuTouch(x,y){
+  if(gameState==="menu"){
+    const sy=295;
+    for(let i=0;i<MAIN_MENU.length;i++){
+      if(y>sy+i*38-15&&y<sy+i*38+15){
+        menuSel=i;
+        if(i===0){gameState="songSelect";songSelIdx=0;}
+        else if(i===1) startGame(-1);
+        else if(i===2) enterEditor();
+        else if(i===3){gameState="settings";settIdx=0;}
         return;
       }
     }
-  } else {
-    // Random mode: spawn notes at intervals
-    randomSpawnTimer += dt;
-    if (randomSpawnTimer >= RANDOM_SPAWN_INTERVAL) {
-      randomSpawnTimer -= RANDOM_SPAWN_INTERVAL;
-      if (Math.random() < RANDOM_SPAWN_CHANCE) {
-        const lane = Math.floor(Math.random() * NUM_LANES);
-        notes.push({ lane, y: -NOTE_RADIUS, hit: false, missed: false });
+  } else if(gameState==="songSelect"){
+    if(y<60){gameState="menu";return;}
+    const sy=120;
+    for(let i=0;i<SONGS.length;i++){
+      if(y>sy+i*55-20&&y<sy+i*55+30){ if(songUnlocked(SONGS[i])) startGame(i); return; }
+    }
+  } else if(gameState==="results") gameState="songSelect";
+  else if(gameState==="calibration") handleCalTap();
+  else if(gameState==="settings"){
+    if(y<CANVAS_H*0.3) settIdx=(settIdx-1+SETT_ITEMS.length)%SETT_ITEMS.length;
+    else if(y>CANVAS_H*0.7) settIdx=(settIdx+1)%SETT_ITEMS.length;
+    else settAction(1);
+  }
+}
+setupTouch();
+
+/* =====================================================================
+   SETTINGS ACTIONS
+   ===================================================================== */
+function settAction(dir){
+  const item=SETT_ITEMS[settIdx];
+  if(item==="Difficulty"){
+    const ks=Object.keys(DIFFICULTIES); let i=ks.indexOf(settings.difficulty);
+    i=(i+dir+ks.length)%ks.length; settings.difficulty=ks[i]; applyDiff();
+  } else if(item==="Drum Kit"){
+    const ks=Object.keys(DRUM_KITS); let i=ks.indexOf(settings.drumKit);
+    i=(i+dir+ks.length)%ks.length; settings.drumKit=ks[i]; ensureAudio(); playDrum("snare");
+  } else if(item==="Theme"){
+    const ks=Object.keys(THEMES); let i=ks.indexOf(settings.theme);
+    i=(i+dir+ks.length)%ks.length; settings.theme=ks[i];
+  } else if(item==="Touch Controls"){
+    settings.touchEnabled=!settings.touchEnabled;
+    tpEl.style.display=settings.touchEnabled?"block":"none";
+  } else if(item==="Calibrate Latency"){ if(dir>0) startCal(); }
+  else if(item==="Import Song JSON"){ if(dir>0) importJSON(); }
+  else if(item==="Back"){ saveSettings(); gameState="menu"; }
+  saveSettings();
+}
+
+function importJSON(){
+  const raw=prompt("Paste song JSON ({title, bpm, notes:[{timeMs, lane}]}):");
+  if(!raw) return;
+  try {
+    const d=JSON.parse(raw);
+    if(!d.title||!d.bpm||!Array.isArray(d.notes)){ alert("Need {title, bpm, notes:[{timeMs,lane}]}"); return; }
+    for(const n of d.notes){
+      if(typeof n.timeMs!=="number"||typeof n.lane!=="number"||n.lane<0||n.lane>=NUM_LANES){
+        alert("Each note needs {timeMs:number, lane:0-3}"); return;
       }
     }
+    const key="imported_"+Date.now();
+    SONGS.push({ key, title:String(d.title).substring(0,40),
+      bpm:Math.max(60,Math.min(300,Number(d.bpm))), difficulty:d.difficulty||1, unlockStars:0,
+      notes:d.notes.map(n=>({time:n.timeMs/1000,lane:n.lane})).sort((a,b)=>a.time-b.time) });
+    alert("Imported \""+d.title+"\" with "+d.notes.length+" notes!");
+  } catch(e){ alert("JSON parse error: "+e.message); }
+}
+
+/* =====================================================================
+   CALIBRATION
+   ===================================================================== */
+function startCal(){
+  gameState="calibration"; calTaps=[]; calBeatT=0; calBeatN=0; calPhase="tapping"; calStart=0;
+  ensureAudio();
+}
+function handleCalTap(){
+  if(calPhase==="done"){ gameState="settings"; return; }
+  if(calPhase!=="tapping") return;
+  if(calStart===0) return; // wait for first tick
+  const expected=calBeatN*calInterval;
+  const actual=performance.now()/1000-calStart;
+  calTaps.push(actual-expected);
+  if(calTaps.length>=8){
+    const avg=calTaps.reduce((a,b)=>a+b,0)/calTaps.length;
+    settings.latencyMs=Math.round(avg*1000); saveSettings(); calPhase="done";
+  }
+}
+
+/* =====================================================================
+   SONG EDITOR
+   ===================================================================== */
+function enterEditor(){
+  gameState="editor"; edNotes=[]; edBPM=120; edTitle="My Song"; edRecording=false;
+}
+function editorKey(k){
+  if(k==="escape"){ gameState="menu"; return; }
+  if(k==="r"){
+    edRecording=!edRecording;
+    if(edRecording){ edNotes=[]; edRecStart=performance.now()/1000; songStartTime=edRecStart; }
+    return;
+  }
+  if(k==="e"){
+    const data={title:edTitle, bpm:edBPM, notes:edNotes.sort((a,b)=>a.timeMs-b.timeMs)};
+    prompt("Copy this JSON:", JSON.stringify(data,null,2)); return;
+  }
+  if(k==="p"){
+    // Play back the recorded song
+    if(edNotes.length===0) return;
+    // Add as temp song and play it
+    const key="editor_preview";
+    const existing=SONGS.findIndex(s=>s.key===key);
+    const songObj={ key, title:"Editor Preview", bpm:edBPM, difficulty:1, unlockStars:0,
+      notes:edNotes.map(n=>({time:n.timeMs/1000,lane:n.lane})).sort((a,b)=>a.time-b.time) };
+    if(existing>=0) SONGS[existing]=songObj; else SONGS.push(songObj);
+    startGame(SONGS.findIndex(s=>s.key===key));
+    return;
+  }
+  if(k==="arrowup"){ edBPM=Math.min(300,edBPM+5); return; }
+  if(k==="arrowdown"){ edBPM=Math.max(60,edBPM-5); return; }
+  if(edRecording){
+    const li=LANES.findIndex(l=>l.key===k);
+    if(li!==-1){ ensureAudio(); playDrum(LANES[li].drumType);
+      edNotes.push({timeMs:Math.round((performance.now()/1000-edRecStart)*1000),lane:li}); }
+  }
+}
+
+/* =====================================================================
+   START GAME
+   ===================================================================== */
+function startGame(idx){
+  score=0; combo=0; maxCombo=0; multiplier=1;
+  totalPerfect=0; totalGood=0; totalMiss=0;
+  notes=[]; floats=[]; particles=[]; ripples=[];
+  laneFlash=[0,0,0,0]; rndTimer=0;
+  songFinished=false; songEndTimer=0;
+  hp=HP_MAX; feverMeter=0; feverOn=false; feverTimer=0;
+  shakeT=0; shakeX=0; shakeY=0; bassT=0; bassI=0; eq.fill(0);
+  edRecording=false; applyDiff();
+
+  if(idx<0){
+    songMode=false; curBPM=120; curSongKey=""; noteSpeed=BASE_NOTE_SPEED;
+    gameState="playing";
+  } else {
+    songMode=true; const s=SONGS[idx];
+    songNotes=s.notes.map(n=>({...n})); songNextIdx=0; songTotalNotes=songNotes.length;
+    curBPM=s.bpm; curSongKey=s.key;
+    noteSpeed=BASE_NOTE_SPEED*(s.bpm/120);
+    ciBeatDur=60/s.bpm; ciBeat=0; ciTimer=0;
+    gameState="countdown";
+  }
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+function update(dt){
+  gameTime+=dt;
+
+  // Shake
+  if(shakeT>0){ shakeT-=dt; shakeX=(Math.random()-0.5)*shakeT*60; shakeY=(Math.random()-0.5)*shakeT*40;
+    if(shakeT<=0){shakeX=0;shakeY=0;} }
+
+  // EQ decay
+  for(let i=0;i<eq.length;i++) eq[i]=Math.max(0,eq[i]-dt*2.5);
+
+  // Ripples
+  for(const r of ripples){ r.radius+=dt*200; r.a-=dt*3; }
+  ripples=ripples.filter(r=>r.a>0);
+
+  // Count-in
+  if(gameState==="countdown"){
+    ciTimer+=dt;
+    if(ciTimer>=ciBeatDur){
+      ciTimer-=ciBeatDur; ciBeat++;
+      if(ciBeat<=ciTotal) playTick(ciBeat===1);
+      if(ciBeat>ciTotal){
+        gameState="playing";
+        songStartTime=performance.now()/1000+(settings.latencyMs||0)/1000;
+      }
+    }
+    return;
   }
 
-  // --- Move Notes ---
-  for (const note of notes) {
-    if (note.hit) continue;
-    note.y += NOTE_SPEED * dt;
-    // Miss detection: note passed well beyond the hit zone
-    if (!note.missed && note.y > HIT_ZONE_Y + GOOD_WINDOW) {
-      note.missed = true;
-      combo = 0;
-      totalMiss++;
-      updateMultiplier();
-      spawnFloat("MISS", laneCenterX(note.lane), HIT_ZONE_Y - 30, "#ff4466");
+  // Calibration
+  if(gameState==="calibration"){
+    calBeatT+=dt;
+    if(calBeatT>=calInterval){
+      calBeatT-=calInterval;
+      if(calPhase==="tapping"){
+        calBeatN++;
+        if(calBeatN===1) calStart=performance.now()/1000;
+        playTick(calBeatN%4===1);
+      }
+    }
+    return;
+  }
+
+  if(gameState!=="playing") return;
+  const now=performance.now()/1000;
+
+  // Fever
+  if(feverOn){ feverTimer-=dt; if(feverTimer<=0){feverOn=false;feverMeter=0;} }
+
+  // Background bass
+  if(songMode){
+    bassT+=dt; const bbd=60/curBPM;
+    if(bassT>=bbd){ bassT-=bbd; const f=BASS[bassI%BASS.length]; if(f>0) playBassNote(f,bbd*0.8); bassI++; }
+  }
+
+  // Spawn notes
+  if(songMode){
+    const fallT=HIT_ZONE_Y/noteSpeed;
+    const st=now-songStartTime;
+    while(songNextIdx<songNotes.length){
+      const sn=songNotes[songNextIdx];
+      if(st>=sn.time-fallT){ notes.push({lane:sn.lane,y:-NOTE_RADIUS,hit:false,missed:false}); songNextIdx++; }
+      else break;
+    }
+    if(songNextIdx>=songNotes.length&&notes.every(n=>n.hit||n.missed||n.y>CANVAS_H+50)){
+      songEndTimer+=dt; if(songEndTimer>2){ songFinished=true; finishSong(); return; }
+    }
+  } else {
+    rndTimer+=dt;
+    if(rndTimer>=RANDOM_SPAWN_INTERVAL){ rndTimer-=RANDOM_SPAWN_INTERVAL;
+      if(Math.random()<RANDOM_SPAWN_CHANCE) notes.push({lane:Math.random()*NUM_LANES|0,y:-NOTE_RADIUS,hit:false,missed:false});
     }
   }
 
-  // --- Remove off-screen / hit notes (after fade) ---
-  notes = notes.filter(n => {
-    if (n.hit) return false;  // Remove immediately on hit (visual handled by particles)
-    if (n.y > CANVAS_H + 60) return false; // Off screen
-    return true;
-  });
-
-  // --- Update Lane Flashes ---
-  for (let i = 0; i < NUM_LANES; i++) {
-    if (laneFlash[i] > 0) laneFlash[i] -= dt;
-  }
-
-  // --- Update Floating Text ---
-  for (const f of floats) {
-    f.y += f.vy * dt;
-    f.alpha -= dt * 1.5;
-    f.scale = Math.max(1.0, f.scale - dt * 2);
-  }
-  floats = floats.filter(f => f.alpha > 0);
-
-  // --- Update Particles ---
-  for (const p of particles) {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.vy += 200 * dt; // Gravity
-    p.life -= dt;
-  }
-  particles = particles.filter(p => p.life > 0);
-}
-
-// =============================================================================
-// DRAW — All rendering goes here
-// =============================================================================
-
-/** Draw the darkened lane backgrounds with subtle grid lines. */
-function drawLanes() {
-  for (let i = 0; i < NUM_LANES; i++) {
-    const x = LANE_START_X + i * (LANE_WIDTH + LANE_GAP);
-    const col = LANES[i].color;
-
-    // Lane background
-    ctx.fillStyle = "rgba(255,255,255,0.03)";
-    ctx.fillRect(x, 0, LANE_WIDTH, CANVAS_H);
-
-    // Lane border glow
-    ctx.strokeStyle = col;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.15;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = col;
-    ctx.strokeRect(x, 0, LANE_WIDTH, CANVAS_H);
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
-
-    // Flash overlay when key pressed
-    if (laneFlash[i] > 0) {
-      const flashAlpha = laneFlash[i] / 0.15 * 0.25;
-      ctx.fillStyle = col;
-      ctx.globalAlpha = flashAlpha;
-      ctx.fillRect(x, 0, LANE_WIDTH, CANVAS_H);
-      ctx.globalAlpha = 1;
+  // Move notes
+  const spd=songMode?noteSpeed:BASE_NOTE_SPEED;
+  for(const n of notes){
+    if(n.hit) continue;
+    n.y+=spd*dt;
+    if(!n.missed&&n.y>HIT_ZONE_Y+GW){
+      n.missed=true; combo=0; totalMiss++; updateMul();
+      feverMeter=Math.max(0,feverMeter-2); hp-=HP_DRAIN;
+      spawnFloat("MISS",lcx(n.lane),HIT_ZONE_Y-30,"#ff4466"); trigShake(3,0.1);
     }
   }
+  notes=notes.filter(n=>!n.hit&&n.y<=CANVAS_H+60);
+
+  // HP check
+  if(hp<=0&&songMode){ hp=0; spawnFloat("FAILED!",CANVAS_W/2,CANVAS_H/2,"#ff3355"); finishSong(); return; }
+
+  // Flashes
+  for(let i=0;i<NUM_LANES;i++) if(laneFlash[i]>0) laneFlash[i]-=dt;
+
+  // Floats
+  for(const f of floats){ f.y+=f.vy*dt; f.a-=dt*1.5; f.sc=Math.max(1,f.sc-dt*2); }
+  floats=floats.filter(f=>f.a>0);
+
+  // Particles
+  for(const p of particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=200*dt; p.life-=dt; }
+  particles=particles.filter(p=>p.life>0);
 }
 
-/** Draw the hit zone — a glowing horizontal target line with key labels. */
-function drawHitZone() {
-  // Main line
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 2;
-  ctx.globalAlpha = 0.4;
-  ctx.shadowBlur = 12;
-  ctx.shadowColor = "#ffffff";
-  const leftEdge  = LANE_START_X;
-  const rightEdge = LANE_START_X + NUM_LANES * LANE_WIDTH + (NUM_LANES - 1) * LANE_GAP;
-  ctx.beginPath();
-  ctx.moveTo(leftEdge, HIT_ZONE_Y);
-  ctx.lineTo(rightEdge, HIT_ZONE_Y);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.globalAlpha = 1;
-
-  // Per-lane target circles + key labels
-  for (let i = 0; i < NUM_LANES; i++) {
-    const cx = laneCenterX(i);
-    const col = LANES[i].color;
-    const flash = laneFlash[i] > 0;
-
-    // Outer ring
-    ctx.beginPath();
-    ctx.arc(cx, HIT_ZONE_Y, NOTE_RADIUS + 4, 0, Math.PI * 2);
-    ctx.strokeStyle = col;
-    ctx.lineWidth = flash ? 3 : 1.5;
-    ctx.globalAlpha = flash ? 0.9 : 0.35;
-    ctx.shadowBlur = flash ? 20 : 8;
-    ctx.shadowColor = col;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
-
-    // Key label below hit zone
-    ctx.font = "bold 16px monospace";
-    ctx.fillStyle = col;
-    ctx.globalAlpha = 0.7;
-    ctx.textAlign = "center";
-    ctx.fillText(LANES[i].label, cx, HIT_ZONE_Y + NOTE_RADIUS + 22);
-    ctx.globalAlpha = 1;
-
-    // Drum name below key
-    ctx.font = "10px monospace";
-    ctx.fillStyle = col;
-    ctx.globalAlpha = 0.4;
-    ctx.fillText(LANES[i].name, cx, HIT_ZONE_Y + NOTE_RADIUS + 36);
-    ctx.globalAlpha = 1;
-  }
+/* =====================================================================
+   FINISH SONG
+   ===================================================================== */
+function finishSong(){
+  gameState="results";
+  if(!songMode) return;
+  const stars=calcStars(totalPerfect,totalGood,totalMiss,songTotalNotes);
+  if(!curSongKey) return;
+  const prev=settings.starsEarned[curSongKey]||0;
+  if(stars>prev) settings.starsEarned[curSongKey]=stars;
+  if(!settings.highScores[curSongKey]) settings.highScores[curSongKey]=[];
+  settings.highScores[curSongKey].push({score,stars,date:Date.now()});
+  settings.highScores[curSongKey].sort((a,b)=>b.score-a.score);
+  settings.highScores[curSongKey]=settings.highScores[curSongKey].slice(0,10);
+  saveSettings();
 }
 
-/** Draw falling note circles with neon glow. */
-function drawNotes() {
-  for (const note of notes) {
-    if (note.hit) continue;
-    const cx = laneCenterX(note.lane);
-    const col = LANES[note.lane].color;
-    const missAlpha = note.missed ? 0.3 : 1.0;
-
-    // Glow
-    ctx.beginPath();
-    ctx.arc(cx, note.y, NOTE_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = col;
-    ctx.globalAlpha = missAlpha * 0.8;
-    ctx.shadowBlur = 18;
-    ctx.shadowColor = col;
-    ctx.fill();
-
-    // Inner bright core
-    ctx.beginPath();
-    ctx.arc(cx, note.y, NOTE_RADIUS * 0.55, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff";
-    ctx.globalAlpha = missAlpha * 0.6;
-    ctx.shadowBlur = 0;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
-  }
-}
-
-/** Draw floating text feedback. */
-function drawFloats() {
-  for (const f of floats) {
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, f.alpha);
-    ctx.font = `bold ${Math.round(14 * f.scale)}px monospace`;
-    ctx.textAlign = "center";
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = f.color;
-    ctx.fillStyle = f.color;
-    ctx.fillText(f.text, f.x, f.y);
-    ctx.restore();
-  }
-}
-
-/** Draw particles. */
-function drawParticles() {
-  for (const p of particles) {
-    const alpha = Math.max(0, p.life / p.maxLife);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.radius * alpha, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.globalAlpha = alpha * 0.9;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = p.color;
-    ctx.fill();
-  }
-  ctx.shadowBlur = 0;
-  ctx.globalAlpha = 1;
-}
-
-/** Draw the HUD — score, combo, multiplier. */
-function drawHUD() {
-  // Score (top left)
-  ctx.font = "bold 28px monospace";
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#fff";
-  ctx.shadowBlur = 6;
-  ctx.shadowColor = "#00ccff";
-  ctx.fillText(String(score).padStart(7, "0"), 20, 40);
-  ctx.shadowBlur = 0;
-
-  // Song title (top center, song mode only)
-  if (songMode && songNextIdx <= songNotes.length) {
-    const songIdx = menuSelection - 1;
-    if (songIdx >= 0 && songIdx < SONGS.length) {
-      ctx.font = "12px monospace";
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#888";
-      ctx.fillText(SONGS[songIdx].title.toUpperCase(), CANVAS_W / 2, 25);
+/* =====================================================================
+   DRAW
+   ===================================================================== */
+function drawBg(){
+  const th=theme();
+  ctx.fillStyle=th.bg; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  // EQ
+  const bw=CANVAS_W/eq.length;
+  for(let i=0;i<eq.length;i++){
+    if(eq[i]>0.01){
+      const h=eq[i]*200;
+      const g=ctx.createLinearGradient(0,CANVAS_H-h,0,CANVAS_H);
+      g.addColorStop(0,feverOn?"rgba(255,220,0,0.08)":"rgba(255,255,255,0.04)");
+      g.addColorStop(1,"rgba(255,255,255,0)");
+      ctx.fillStyle=g; ctx.fillRect(i*bw,CANVAS_H-h,bw-1,h);
     }
   }
+  // Scanlines
+  ctx.globalAlpha=0.025; ctx.fillStyle="#fff";
+  for(let x=0;x<CANVAS_W;x+=3) ctx.fillRect(x,0,1,CANVAS_H);
+  ctx.globalAlpha=1;
+  // Hit zone glow
+  const gr=ctx.createLinearGradient(0,HIT_ZONE_Y-40,0,HIT_ZONE_Y+40);
+  gr.addColorStop(0,"rgba(255,255,255,0)");
+  gr.addColorStop(0.5,feverOn?"rgba(255,220,0,0.06)":"rgba(255,255,255,0.04)");
+  gr.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle=gr; ctx.fillRect(0,HIT_ZONE_Y-40,CANVAS_W,80);
+}
 
-  // Combo + Multiplier (top right)
-  if (combo > 0) {
-    // Multiplier with pulse effect
-    const pulse = multiplier > 1 ? 1 + Math.sin(performance.now() * 0.008) * 0.08 : 1;
-    const mSize = Math.round(24 * pulse);
-    ctx.font = `bold ${mSize}px monospace`;
-    ctx.textAlign = "right";
-    const mCol = multiplier >= 8 ? "#ffdd00" : multiplier >= 4 ? "#ff8800" : multiplier >= 2 ? "#33ff66" : "#aaa";
-    ctx.fillStyle = mCol;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = mCol;
-    ctx.fillText(`${multiplier}x`, CANVAS_W - 20, 40);
-    ctx.shadowBlur = 0;
-
-    // Combo count
-    ctx.font = "14px monospace";
-    ctx.fillStyle = "#ccc";
-    ctx.fillText(`${combo} COMBO`, CANVAS_W - 20, 60);
+function drawLanes(){
+  for(let i=0;i<NUM_LANES;i++){
+    const x=LANE_START_X+i*(LANE_WIDTH+LANE_GAP), col=LANES[i].color;
+    ctx.fillStyle=feverOn?"rgba(255,220,0,0.04)":"rgba(255,255,255,0.03)";
+    ctx.fillRect(x,0,LANE_WIDTH,CANVAS_H);
+    ctx.strokeStyle=col; ctx.lineWidth=1; ctx.globalAlpha=0.15;
+    ctx.shadowBlur=8; ctx.shadowColor=col; ctx.strokeRect(x,0,LANE_WIDTH,CANVAS_H);
+    ctx.shadowBlur=0; ctx.globalAlpha=1;
+    if(laneFlash[i]>0){ ctx.fillStyle=col; ctx.globalAlpha=laneFlash[i]/0.15*0.25;
+      ctx.fillRect(x,0,LANE_WIDTH,CANVAS_H); ctx.globalAlpha=1; }
   }
 }
 
-/** Draw the background — subtle animated grid for arcade feel. */
-function drawBackground() {
-  // Dark fill
-  ctx.fillStyle = "#0a0a12";
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-  // Subtle vertical scanlines
-  ctx.globalAlpha = 0.03;
-  for (let x = 0; x < CANVAS_W; x += 3) {
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(x, 0, 1, CANVAS_H);
+function drawHitZone(){
+  const le=LANE_START_X, re=LANE_START_X+NUM_LANES*LANE_WIDTH+(NUM_LANES-1)*LANE_GAP;
+  ctx.strokeStyle=feverOn?"#ffdd00":"#fff"; ctx.lineWidth=2; ctx.globalAlpha=0.4;
+  ctx.shadowBlur=12; ctx.shadowColor=feverOn?"#ffdd00":"#fff";
+  ctx.beginPath(); ctx.moveTo(le,HIT_ZONE_Y); ctx.lineTo(re,HIT_ZONE_Y); ctx.stroke();
+  ctx.shadowBlur=0; ctx.globalAlpha=1;
+  // Ripples
+  for(const r of ripples){
+    ctx.beginPath(); ctx.arc(r.x,r.y,r.radius,0,Math.PI*2);
+    ctx.strokeStyle=r.color; ctx.lineWidth=2; ctx.globalAlpha=Math.max(0,r.a);
+    ctx.shadowBlur=10; ctx.shadowColor=r.color; ctx.stroke();
   }
-  ctx.globalAlpha = 1;
-
-  // Subtle horizontal line at hit zone area
-  const grad = ctx.createLinearGradient(0, HIT_ZONE_Y - 40, 0, HIT_ZONE_Y + 40);
-  grad.addColorStop(0, "rgba(255,255,255,0)");
-  grad.addColorStop(0.5, "rgba(255,255,255,0.04)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, HIT_ZONE_Y - 40, CANVAS_W, 80);
+  ctx.shadowBlur=0; ctx.globalAlpha=1;
+  for(let i=0;i<NUM_LANES;i++){
+    const cx=lcx(i), col=LANES[i].color, fl=laneFlash[i]>0;
+    ctx.beginPath(); ctx.arc(cx,HIT_ZONE_Y,NOTE_RADIUS+4,0,Math.PI*2);
+    ctx.strokeStyle=col; ctx.lineWidth=fl?3:1.5; ctx.globalAlpha=fl?0.9:0.35;
+    ctx.shadowBlur=fl?20:8; ctx.shadowColor=col; ctx.stroke(); ctx.shadowBlur=0; ctx.globalAlpha=1;
+    ctx.font="bold 16px monospace"; ctx.fillStyle=col; ctx.globalAlpha=0.7;
+    ctx.textAlign="center"; ctx.fillText(LANES[i].label,cx,HIT_ZONE_Y+NOTE_RADIUS+22);
+    ctx.globalAlpha=0.4; ctx.font="10px monospace";
+    ctx.fillText(LANES[i].name,cx,HIT_ZONE_Y+NOTE_RADIUS+36); ctx.globalAlpha=1;
+  }
 }
 
-// =============================================================================
-// DRAW: MENU SCREEN
-// =============================================================================
-function drawMenu() {
-  ctx.fillStyle = "#0a0a12";
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+function drawNotes(){
+  for(const n of notes){
+    if(n.hit) continue;
+    const cx=lcx(n.lane), col=LANES[n.lane].color;
+    const ma=n.missed?0.3:1;
+    // Trail
+    if(!n.missed){
+      const tg=ctx.createLinearGradient(cx,n.y-30,cx,n.y);
+      tg.addColorStop(0,"rgba(0,0,0,0)"); tg.addColorStop(1,col+"44");
+      ctx.fillStyle=tg; ctx.fillRect(cx-NOTE_RADIUS*0.4,n.y-30,NOTE_RADIUS*0.8,30);
+    }
+    ctx.beginPath(); ctx.arc(cx,n.y,NOTE_RADIUS,0,Math.PI*2);
+    ctx.fillStyle=col; ctx.globalAlpha=ma*0.8;
+    ctx.shadowBlur=18; ctx.shadowColor=col; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx,n.y,NOTE_RADIUS*0.55,0,Math.PI*2);
+    ctx.fillStyle="#fff"; ctx.globalAlpha=ma*0.6; ctx.shadowBlur=0; ctx.fill();
+    ctx.globalAlpha=1;
+  }
+}
+
+function drawFloats(){
+  for(const f of floats){
+    ctx.save(); ctx.globalAlpha=Math.max(0,f.a);
+    ctx.font="bold "+Math.round(14*f.sc)+"px monospace";
+    ctx.textAlign="center"; ctx.shadowBlur=10; ctx.shadowColor=f.color;
+    ctx.fillStyle=f.color; ctx.fillText(f.text,f.x,f.y); ctx.restore();
+  }
+}
+
+function drawParticles(){
+  for(const p of particles){
+    const a=Math.max(0,p.life/p.ml);
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r*a,0,Math.PI*2);
+    ctx.fillStyle=p.color; ctx.globalAlpha=a*0.9;
+    ctx.shadowBlur=8; ctx.shadowColor=p.color; ctx.fill();
+  }
+  ctx.shadowBlur=0; ctx.globalAlpha=1;
+}
+
+function drawHUD(){
+  // Score
+  ctx.font="bold 28px monospace"; ctx.textAlign="left";
+  ctx.fillStyle="#fff"; ctx.shadowBlur=6; ctx.shadowColor="#00ccff";
+  ctx.fillText(String(score).padStart(7,"0"),20,40); ctx.shadowBlur=0;
 
   // Title
-  ctx.textAlign = "center";
-  ctx.font = "bold 36px monospace";
-  ctx.shadowBlur = 20;
-  ctx.shadowColor = "#ff3355";
-  ctx.fillStyle = "#ff3355";
-  ctx.fillText("REAGAN'S", CANVAS_W / 2, 140);
-  ctx.shadowColor = "#00ccff";
-  ctx.fillStyle = "#00ccff";
-  ctx.fillText("RHYTHM RUMBLE", CANVAS_W / 2, 185);
-  ctx.shadowBlur = 0;
+  if(songMode){
+    const si=SONGS.findIndex(s=>s.key===curSongKey);
+    if(si>=0){ ctx.font="12px monospace"; ctx.textAlign="center"; ctx.fillStyle="#888";
+      ctx.fillText(SONGS[si].title.toUpperCase(),CANVAS_W/2,25); }
+  } else { ctx.font="12px monospace"; ctx.textAlign="center"; ctx.fillStyle="#666";
+    ctx.fillText("RANDOM MODE \u2014 ESC TO EXIT",CANVAS_W/2,25); }
 
-  // Subtitle
-  ctx.font = "14px monospace";
-  ctx.fillStyle = "#666";
-  ctx.fillText("A Neon Drum Arcade", CANVAS_W / 2, 215);
+  // Difficulty
+  const diff=DIFFICULTIES[settings.difficulty];
+  ctx.font="9px monospace"; ctx.textAlign="left"; ctx.fillStyle=diff.color;
+  ctx.fillText(diff.label,20,58);
 
-  // Drum kit decorative icons
-  const drumY = 255;
-  for (let i = 0; i < NUM_LANES; i++) {
-    const dx = CANVAS_W / 2 - 120 + i * 80;
-    ctx.beginPath();
-    ctx.arc(dx, drumY, 18, 0, Math.PI * 2);
-    ctx.strokeStyle = LANES[i].color;
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 12;
-    ctx.shadowColor = LANES[i].color;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.font = "bold 12px monospace";
-    ctx.fillStyle = LANES[i].color;
-    ctx.fillText(LANES[i].label, dx, drumY + 5);
-    ctx.font = "9px monospace";
-    ctx.fillStyle = "#777";
-    ctx.fillText(LANES[i].name, dx, drumY + 30);
+  // Combo + Multiplier
+  if(combo>0){
+    const em=effMul(), pulse=em>1?1+Math.sin(performance.now()*0.008)*0.08:1;
+    ctx.font="bold "+Math.round(24*pulse)+"px monospace"; ctx.textAlign="right";
+    const mc=em>=16?"#ff44ff":em>=8?"#ffdd00":em>=4?"#ff8800":em>=2?"#33ff66":"#aaa";
+    ctx.fillStyle=mc; ctx.shadowBlur=10; ctx.shadowColor=mc;
+    ctx.fillText(em+"x",CANVAS_W-20,40); ctx.shadowBlur=0;
+    ctx.font="14px monospace"; ctx.fillStyle="#ccc";
+    ctx.fillText(combo+" COMBO",CANVAS_W-20,60);
   }
 
-  // Menu items
-  const startY = 320;
-  ctx.font = "16px monospace";
-  for (let i = 0; i < menuItems.length; i++) {
-    const selected = i === menuSelection;
-    const y = startY + i * 36;
-    if (selected) {
-      ctx.fillStyle = "#00ccff";
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = "#00ccff";
-      ctx.fillText(`▶  ${menuItems[i]}  ◀`, CANVAS_W / 2, y);
-      ctx.shadowBlur = 0;
-    } else {
-      ctx.fillStyle = "#555";
-      ctx.fillText(menuItems[i], CANVAS_W / 2, y);
+  // HP bar
+  const hx=20,hy=68,hw=150,hh=8;
+  ctx.fillStyle="#222"; ctx.fillRect(hx,hy,hw,hh);
+  const hpct=Math.max(0,hp/HP_MAX);
+  ctx.fillStyle=hpct>0.5?"#33ff66":hpct>0.25?"#ffdd00":"#ff3355";
+  ctx.fillRect(hx,hy,hw*hpct,hh);
+  ctx.strokeStyle="#444"; ctx.lineWidth=1; ctx.strokeRect(hx,hy,hw,hh);
+  ctx.font="8px monospace"; ctx.textAlign="left"; ctx.fillStyle="#888";
+  ctx.fillText("HP",hx+hw+5,hy+7);
+
+  // Fever bar
+  const fx=CANVAS_W-170,fy=68,fw=150,fh=8;
+  ctx.fillStyle="#222"; ctx.fillRect(fx,fy,fw,fh);
+  if(feverOn){
+    ctx.fillStyle="#ffdd00"; ctx.fillRect(fx,fy,fw*(feverTimer/FEVER_DUR),fh);
+    ctx.strokeStyle="rgba(255,220,0,"+(0.5+Math.sin(performance.now()*0.01)*0.5)+")";
+  } else {
+    ctx.fillStyle="#aa44ff"; ctx.fillRect(fx,fy,fw*(feverMeter/FEVER_NEED),fh);
+    ctx.strokeStyle="#444";
+  }
+  ctx.lineWidth=1; ctx.strokeRect(fx,fy,fw,fh);
+  ctx.font="8px monospace"; ctx.textAlign="right";
+  ctx.fillStyle=feverOn?"#ffdd00":"#888";
+  ctx.fillText(feverOn?"\u2605 FEVER \u2605":"FEVER",fx-5,fy+7);
+}
+
+/* =====================================================================
+   DRAW: MENU
+   ===================================================================== */
+function drawMenu(){
+  const th=theme();
+  ctx.fillStyle=th.bg; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  ctx.font="bold 36px monospace"; ctx.shadowBlur=20; ctx.shadowColor=th.a1;
+  ctx.fillStyle=th.a1; ctx.fillText("REAGAN'S",CANVAS_W/2,120);
+  ctx.shadowColor=th.a2; ctx.fillStyle=th.a2;
+  ctx.fillText("RHYTHM RUMBLE",CANVAS_W/2,165); ctx.shadowBlur=0;
+  ctx.font="14px monospace"; ctx.fillStyle="#666";
+  ctx.fillText("A Neon Drum Arcade",CANVAS_W/2,195);
+  // Drums
+  const dy=230;
+  for(let i=0;i<NUM_LANES;i++){
+    const dx=CANVAS_W/2-120+i*80;
+    ctx.beginPath(); ctx.arc(dx,dy,18,0,Math.PI*2);
+    ctx.strokeStyle=LANES[i].color; ctx.lineWidth=2;
+    ctx.shadowBlur=12; ctx.shadowColor=LANES[i].color; ctx.stroke(); ctx.shadowBlur=0;
+    ctx.font="bold 12px monospace"; ctx.fillStyle=LANES[i].color;
+    ctx.fillText(LANES[i].label,dx,dy+5);
+    ctx.font="9px monospace"; ctx.fillStyle="#777";
+    ctx.fillText(LANES[i].name,dx,dy+30);
+  }
+  // Menu
+  const sy=295; ctx.font="16px monospace";
+  for(let i=0;i<MAIN_MENU.length;i++){
+    const sel=i===menuSel, y=sy+i*38;
+    if(sel){ ctx.fillStyle=th.a2; ctx.shadowBlur=10; ctx.shadowColor=th.a2;
+      ctx.fillText("\u25B6  "+MAIN_MENU[i]+"  \u25C0",CANVAS_W/2,y); ctx.shadowBlur=0;
+    } else { ctx.fillStyle="#555"; ctx.fillText(MAIN_MENU[i],CANVAS_W/2,y); }
+  }
+  // Stars
+  ctx.font="11px monospace"; ctx.fillStyle="#ffdd00";
+  ctx.fillText("\u2605 "+totalStars()+" Total Stars",CANVAS_W/2,CANVAS_H-120);
+  const kit=DRUM_KITS[settings.drumKit]||DRUM_KITS.standard;
+  ctx.font="10px monospace"; ctx.fillStyle="#555";
+  ctx.fillText("Kit: "+kit.name+" | "+DIFFICULTIES[settings.difficulty].label+" | "+theme().name,CANVAS_W/2,CANVAS_H-100);
+  ctx.font="11px monospace"; ctx.fillStyle="#444";
+  ctx.fillText("\u2191/\u2193  SELECT     ENTER  START",CANVAS_W/2,CANVAS_H-60);
+  ctx.fillText("D  F  J  K  \u2014  DRUM KEYS",CANVAS_W/2,CANVAS_H-40);
+  if(Math.floor(performance.now()/600)%2){
+    ctx.font="13px monospace"; ctx.fillStyle="#ffdd00";
+    ctx.fillText("PRESS ENTER",CANVAS_W/2,CANVAS_H-80);
+  }
+}
+
+/* =====================================================================
+   DRAW: SONG SELECT
+   ===================================================================== */
+function drawSongSelect(){
+  const th=theme();
+  ctx.fillStyle=th.bg; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  ctx.font="bold 24px monospace"; ctx.fillStyle=th.a2;
+  ctx.shadowBlur=10; ctx.shadowColor=th.a2;
+  ctx.fillText("SELECT SONG",CANVAS_W/2,50); ctx.shadowBlur=0;
+  ctx.font="10px monospace"; ctx.fillStyle="#555";
+  ctx.fillText("\u2605 "+totalStars()+" Stars Earned",CANVAS_W/2,75);
+  const sy=120;
+  for(let i=0;i<SONGS.length;i++){
+    const s=SONGS[i], sel=i===songSelIdx, locked=!songUnlocked(s);
+    const y=sy+i*55, earned=settings.starsEarned[s.key]||0;
+    const best=(settings.highScores[s.key]||[])[0];
+    if(sel){ ctx.fillStyle="rgba(255,255,255,0.05)"; ctx.fillRect(CANVAS_W/2-250,y-20,500,48); }
+    ctx.font=sel?"bold 16px monospace":"14px monospace";
+    if(locked){ ctx.fillStyle="#444"; ctx.fillText("\uD83D\uDD12 "+s.title+" (Need "+s.unlockStars+"\u2605)",CANVAS_W/2,y);
+    } else { ctx.fillStyle=sel?th.a2:"#999"; ctx.fillText(s.title,CANVAS_W/2,y); }
+    if(!locked){
+      ctx.font="10px monospace";
+      ctx.fillStyle="#ffdd00"; ctx.fillText("\u2605".repeat(earned)+"\u2606".repeat(5-earned),CANVAS_W/2-100,y+16);
+      ctx.fillStyle="#666"; ctx.fillText(s.bpm+" BPM",CANVAS_W/2,y+16);
+      if(best){ ctx.fillStyle="#888"; ctx.fillText("Best: "+String(best.score).padStart(7,"0"),CANVAS_W/2+100,y+16); }
     }
   }
-
-  // Controls hint
-  ctx.font = "11px monospace";
-  ctx.fillStyle = "#444";
-  ctx.fillText("↑/↓  SELECT     ENTER  START", CANVAS_W / 2, CANVAS_H - 60);
-  ctx.fillText("D  F  J  K  —  DRUM KEYS", CANVAS_W / 2, CANVAS_H - 40);
-
-  // Blinking prompt
-  if (Math.floor(performance.now() / 600) % 2) {
-    ctx.font = "13px monospace";
-    ctx.fillStyle = "#ffdd00";
-    ctx.fillText("PRESS ENTER", CANVAS_W / 2, CANVAS_H - 95);
-  }
+  ctx.font="11px monospace"; ctx.fillStyle="#444";
+  ctx.fillText("\u2191/\u2193  SELECT     ENTER  PLAY     ESC  BACK",CANVAS_W/2,CANVAS_H-40);
 }
 
-// =============================================================================
-// DRAW: RESULTS SCREEN
-// =============================================================================
-function drawResults() {
-  ctx.fillStyle = "rgba(10,10,18,0.95)";
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+/* =====================================================================
+   DRAW: SETTINGS
+   ===================================================================== */
+function drawSettings(){
+  const th=theme();
+  ctx.fillStyle=th.bg; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  ctx.font="bold 24px monospace"; ctx.fillStyle=th.a2;
+  ctx.shadowBlur=10; ctx.shadowColor=th.a2;
+  ctx.fillText("SETTINGS",CANVAS_W/2,60); ctx.shadowBlur=0;
+  const sy=140;
+  const vals={
+    "Difficulty": DIFFICULTIES[settings.difficulty].label,
+    "Drum Kit": (DRUM_KITS[settings.drumKit]||DRUM_KITS.standard).name,
+    "Theme": theme().name,
+    "Touch Controls": settings.touchEnabled?"ON":"OFF",
+    "Calibrate Latency": settings.latencyMs+"ms",
+    "Import Song JSON": "\u2192",
+    "Back": "",
+  };
+  ctx.font="14px monospace";
+  for(let i=0;i<SETT_ITEMS.length;i++){
+    const sel=i===settIdx, y=sy+i*42, item=SETT_ITEMS[i], val=vals[item];
+    if(sel){ ctx.fillStyle="rgba(255,255,255,0.05)"; ctx.fillRect(CANVAS_W/2-200,y-15,400,32); }
+    ctx.textAlign="right"; ctx.fillStyle=sel?"#fff":"#888";
+    ctx.fillText(item,CANVAS_W/2-20,y);
+    ctx.textAlign="left"; ctx.fillStyle=sel?th.a2:"#666";
+    if(val) ctx.fillText("\u25C4 "+val+" \u25BA",CANVAS_W/2+20,y);
+  }
+  ctx.textAlign="center"; ctx.font="11px monospace"; ctx.fillStyle="#444";
+  ctx.fillText("\u2190/\u2192  CHANGE     ESC  BACK",CANVAS_W/2,CANVAS_H-40);
+}
 
-  ctx.textAlign = "center";
+/* =====================================================================
+   DRAW: CALIBRATION
+   ===================================================================== */
+function drawCalibration(){
+  ctx.fillStyle="#0a0a12"; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  ctx.font="bold 20px monospace"; ctx.fillStyle="#00ccff";
+  ctx.fillText("LATENCY CALIBRATION",CANVAS_W/2,100);
+  if(calPhase==="tapping"){
+    ctx.font="14px monospace"; ctx.fillStyle="#ccc";
+    ctx.fillText("Tap any key in time with the beat!",CANVAS_W/2,200);
+    const pulse=Math.sin(calBeatT/calInterval*Math.PI);
+    ctx.beginPath(); ctx.arc(CANVAS_W/2,300,30+pulse*15,0,Math.PI*2);
+    ctx.fillStyle="rgba(0,204,255,"+(0.3+pulse*0.5)+")";
+    ctx.shadowBlur=20; ctx.shadowColor="#00ccff"; ctx.fill(); ctx.shadowBlur=0;
+    ctx.font="12px monospace"; ctx.fillStyle="#888";
+    ctx.fillText("Taps: "+calTaps.length+" / 8",CANVAS_W/2,380);
+  } else if(calPhase==="done"){
+    ctx.font="16px monospace"; ctx.fillStyle="#33ff66";
+    ctx.fillText("Calibration Complete!",CANVAS_W/2,250);
+    ctx.font="24px monospace"; ctx.fillStyle="#fff";
+    ctx.fillText("Offset: "+settings.latencyMs+"ms",CANVAS_W/2,310);
+    ctx.font="12px monospace"; ctx.fillStyle="#888";
+    ctx.fillText("Press any key to return",CANVAS_W/2,380);
+  }
+  ctx.font="11px monospace"; ctx.fillStyle="#444";
+  ctx.fillText("ESC  CANCEL",CANVAS_W/2,CANVAS_H-40);
+}
 
-  // Header
-  ctx.font = "bold 32px monospace";
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = "#ffdd00";
-  ctx.fillStyle = "#ffdd00";
-  ctx.fillText("STAGE CLEAR!", CANVAS_W / 2, 120);
-  ctx.shadowBlur = 0;
+/* =====================================================================
+   DRAW: COUNTDOWN
+   ===================================================================== */
+function drawCountdown(){
+  drawBg(); drawLanes(); drawHitZone();
+  ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  const rem=ciTotal-ciBeat+1;
+  if(rem>0&&rem<=ciTotal){
+    const pulse=1+(ciTimer/ciBeatDur)*0.3;
+    ctx.font="bold "+Math.round(80*pulse)+"px monospace";
+    ctx.fillStyle="#fff"; ctx.shadowBlur=20; ctx.shadowColor="#00ccff";
+    ctx.fillText(String(rem),CANVAS_W/2,CANVAS_H/2+20); ctx.shadowBlur=0;
+  }
+  ctx.font="14px monospace"; ctx.fillStyle="#888";
+  ctx.fillText("GET READY!",CANVAS_W/2,CANVAS_H/2-60);
+}
 
-  // Score
-  ctx.font = "bold 48px monospace";
-  ctx.fillStyle = "#fff";
-  ctx.shadowBlur = 10;
-  ctx.shadowColor = "#00ccff";
-  ctx.fillText(String(score).padStart(7, "0"), CANVAS_W / 2, 200);
-  ctx.shadowBlur = 0;
-
+/* =====================================================================
+   DRAW: RESULTS
+   ===================================================================== */
+function drawResults(){
+  ctx.fillStyle="rgba(10,10,18,0.95)"; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  const failed=hp<=0;
+  ctx.font="bold 32px monospace"; ctx.shadowBlur=15;
+  ctx.shadowColor=failed?"#ff3355":"#ffdd00";
+  ctx.fillStyle=failed?"#ff3355":"#ffdd00";
+  ctx.fillText(failed?"STAGE FAILED":"STAGE CLEAR!",CANVAS_W/2,100); ctx.shadowBlur=0;
+  ctx.font="bold 48px monospace"; ctx.fillStyle="#fff";
+  ctx.shadowBlur=10; ctx.shadowColor="#00ccff";
+  ctx.fillText(String(score).padStart(7,"0"),CANVAS_W/2,170); ctx.shadowBlur=0;
+  // Stars
+  if(songMode&&songTotalNotes>0){
+    const stars=calcStars(totalPerfect,totalGood,totalMiss,songTotalNotes);
+    ctx.font="32px monospace"; ctx.fillStyle="#ffdd00";
+    ctx.fillText("\u2605".repeat(stars)+"\u2606".repeat(5-stars),CANVAS_W/2,215);
+  }
   // Stats
-  const stats = [
-    { label: "PERFECT", value: totalPerfect, color: "#fff" },
-    { label: "GOOD",    value: totalGood,    color: "#33ff66" },
-    { label: "MISS",    value: totalMiss,    color: "#ff4466" },
-    { label: "MAX COMBO", value: maxCombo,   color: "#ffdd00" },
-    { label: "BEST MULTI", value: `${multiplier}x`, color: "#ff8800" },
+  const stats=[
+    {l:"PERFECT",v:totalPerfect,c:"#fff"},{l:"GOOD",v:totalGood,c:"#33ff66"},
+    {l:"MISS",v:totalMiss,c:"#ff4466"},{l:"MAX COMBO",v:maxCombo,c:"#ffdd00"},
+    {l:"MULTIPLIER",v:effMul()+"x",c:"#ff8800"},
   ];
-
-  ctx.font = "16px monospace";
-  const statY = 260;
-  for (let i = 0; i < stats.length; i++) {
-    const y = statY + i * 32;
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#888";
-    ctx.fillText(stats[i].label, CANVAS_W / 2 - 10, y);
-    ctx.textAlign = "left";
-    ctx.fillStyle = stats[i].color;
-    ctx.fillText(String(stats[i].value), CANVAS_W / 2 + 10, y);
+  ctx.font="16px monospace"; const stY=260;
+  for(let i=0;i<stats.length;i++){
+    const y=stY+i*30;
+    ctx.textAlign="right"; ctx.fillStyle="#888"; ctx.fillText(stats[i].l,CANVAS_W/2-10,y);
+    ctx.textAlign="left"; ctx.fillStyle=stats[i].c; ctx.fillText(String(stats[i].v),CANVAS_W/2+10,y);
   }
-
   // Grade
-  const pct = songTotalNotes > 0 ? totalPerfect / songTotalNotes : 0;
-  let grade = "C";
-  if (totalMiss === 0 && totalGood === 0) grade = "S+";
-  else if (pct > 0.9) grade = "S";
-  else if (pct > 0.75) grade = "A";
-  else if (pct > 0.5) grade = "B";
-  ctx.font = "bold 64px monospace";
-  const gradeCol = grade.startsWith("S") ? "#ffdd00" : grade === "A" ? "#33ff66" : grade === "B" ? "#00ccff" : "#888";
-  ctx.fillStyle = gradeCol;
-  ctx.shadowBlur = 20;
-  ctx.shadowColor = gradeCol;
-  ctx.textAlign = "center";
-  ctx.fillText(grade, CANVAS_W / 2, 490);
-  ctx.shadowBlur = 0;
-
-  // Prompt
-  ctx.font = "12px monospace";
-  ctx.fillStyle = "#555";
-  ctx.fillText("PRESS ENTER TO RETURN", CANVAS_W / 2, CANVAS_H - 50);
+  const pct=songTotalNotes>0?totalPerfect/songTotalNotes:0;
+  let grade="C";
+  if(totalMiss===0&&totalGood===0) grade="S+";
+  else if(pct>0.9) grade="S"; else if(pct>0.75) grade="A"; else if(pct>0.5) grade="B";
+  ctx.font="bold 64px monospace";
+  const gc=grade.startsWith("S")?"#ffdd00":grade==="A"?"#33ff66":grade==="B"?"#00ccff":"#888";
+  ctx.fillStyle=gc; ctx.shadowBlur=20; ctx.shadowColor=gc;
+  ctx.textAlign="center"; ctx.fillText(grade,CANVAS_W/2,480); ctx.shadowBlur=0;
+  // Leaderboard
+  const hs=settings.highScores[curSongKey]||[];
+  if(hs.length>0){
+    ctx.font="10px monospace"; ctx.fillStyle="#666";
+    ctx.fillText("\u2014 LEADERBOARD \u2014",CANVAS_W/2,520);
+    for(let i=0;i<Math.min(5,hs.length);i++){
+      ctx.fillStyle=i===0?"#ffdd00":"#555";
+      ctx.fillText((i+1)+". "+String(hs[i].score).padStart(7,"0")+"  "+"\u2605".repeat(hs[i].stars||0),CANVAS_W/2,540+i*16);
+    }
+  }
+  ctx.font="12px monospace"; ctx.fillStyle="#555";
+  ctx.fillText("PRESS ENTER TO CONTINUE",CANVAS_W/2,CANVAS_H-40);
 }
 
-// =============================================================================
-// MAIN DRAW — Composites all layers
-// =============================================================================
-function draw() {
-  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
-  if (gameState === "menu")    { drawMenu();    return; }
-  if (gameState === "results") { drawResults();  return; }
-
-  // --- Gameplay ---
-  drawBackground();
-  drawLanes();
-  drawHitZone();
-  drawNotes();
-  drawParticles();
-  drawFloats();
-  drawHUD();
+/* =====================================================================
+   DRAW: EDITOR
+   ===================================================================== */
+function drawEditor(){
+  ctx.fillStyle="#0a0a12"; ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.textAlign="center";
+  ctx.font="bold 20px monospace"; ctx.fillStyle="#aa44ff";
+  ctx.fillText("SONG EDITOR",CANVAS_W/2,40);
+  ctx.font="12px monospace"; ctx.fillStyle="#888";
+  ctx.fillText("BPM: "+edBPM+"  (\u2191/\u2193 to change)",CANVAS_W/2,70);
+  ctx.fillText("Notes recorded: "+edNotes.length,CANVAS_W/2,90);
+  if(edRecording){
+    const blink=Math.floor(performance.now()/400)%2;
+    ctx.fillStyle=blink?"#ff3355":"#330000";
+    ctx.fillText("\u25CF RECORDING \u2014 Press D/F/J/K to place notes",CANVAS_W/2,130);
+  } else {
+    ctx.fillStyle="#666";
+    ctx.fillText("R = Record  |  E = Export JSON  |  P = Play Back",CANVAS_W/2,130);
+  }
+  for(let i=0;i<NUM_LANES;i++){
+    ctx.fillStyle=LANES[i].color; ctx.font="bold 14px monospace";
+    ctx.fillText(LANES[i].label,lcx(i),170);
+  }
+  const tlY=200, tlH=CANVAS_H-260;
+  const maxT=edNotes.length>0?Math.max(...edNotes.map(n=>n.timeMs))+2000:5000;
+  ctx.strokeStyle="#333"; ctx.lineWidth=1;
+  for(let i=0;i<NUM_LANES;i++){
+    const cx=lcx(i); ctx.beginPath(); ctx.moveTo(cx,tlY); ctx.lineTo(cx,tlY+tlH); ctx.stroke();
+  }
+  for(const n of edNotes){
+    const cx=lcx(n.lane), ny=tlY+(n.timeMs/maxT)*tlH;
+    ctx.beginPath(); ctx.arc(cx,ny,6,0,Math.PI*2);
+    ctx.fillStyle=LANES[n.lane].color; ctx.fill();
+  }
+  ctx.font="9px monospace"; ctx.fillStyle="#555"; ctx.textAlign="left";
+  for(let ms=0;ms<=maxT;ms+=1000){
+    ctx.fillText((ms/1000).toFixed(1)+"s",10,tlY+(ms/maxT)*tlH+3);
+  }
+  ctx.textAlign="center"; ctx.font="11px monospace"; ctx.fillStyle="#444";
+  ctx.fillText("R  RECORD     E  EXPORT     P  PLAY     ESC  BACK",CANVAS_W/2,CANVAS_H-30);
 }
 
-// =============================================================================
-// GAME LOOP — requestAnimationFrame at 60fps with delta time
-// =============================================================================
-function gameLoop(timestamp) {
-  if (!lastFrameTime) lastFrameTime = timestamp;
-  const dt = Math.min((timestamp - lastFrameTime) / 1000, 0.05); // Cap at 50ms
-  lastFrameTime = timestamp;
+/* =====================================================================
+   MAIN DRAW
+   ===================================================================== */
+function draw(){
+  ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+  ctx.save();
+  if(shakeT>0) ctx.translate(shakeX,shakeY);
+  switch(gameState){
+    case "menu": drawMenu(); break;
+    case "songSelect": drawSongSelect(); break;
+    case "settings": drawSettings(); break;
+    case "calibration": drawCalibration(); break;
+    case "countdown": drawCountdown(); break;
+    case "results": drawResults(); break;
+    case "editor": drawEditor(); break;
+    default: drawBg(); drawLanes(); drawHitZone(); drawNotes(); drawParticles(); drawFloats(); drawHUD();
+  }
+  ctx.restore();
+}
 
-  update(dt);
-  draw();
-
+/* =====================================================================
+   GAME LOOP
+   ===================================================================== */
+function gameLoop(ts){
+  if(!lastFrameTime) lastFrameTime=ts;
+  const dt=Math.min((ts-lastFrameTime)/1000,0.05);
+  lastFrameTime=ts;
+  update(dt); draw();
   requestAnimationFrame(gameLoop);
 }
-
-// Kick off
 requestAnimationFrame(gameLoop);
 </script>
 </body>
