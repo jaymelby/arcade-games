@@ -436,23 +436,39 @@ document.addEventListener("keyup",e=>{ keysDown[e.key.toLowerCase()]=false; });
    INPUT: TOUCH
    ===================================================================== */
 const tpEl=document.getElementById("touchPads");
+let touchListenersAttached=false;
+function hasTouchSupport(){
+  return ("ontouchstart" in window)||(navigator.maxTouchPoints>0)||(navigator.msMaxTouchPoints>0);
+}
 function setupTouch(){
-  if(settings.touchEnabled||("ontouchstart" in window)){
+  if(settings.touchEnabled||hasTouchSupport()){
     settings.touchEnabled=true; tpEl.style.display="block";
-    for(let i=0;i<NUM_LANES;i++){
-      const pad=document.getElementById("tp"+i);
-      pad.textContent=LANES[i].label; pad.style.color=LANES[i].color;
-      pad.style.borderColor=LANES[i].color+"44";
-      pad.addEventListener("touchstart",e=>{ e.preventDefault(); pad.classList.add("active"); processHit(i); },{passive:false});
-      pad.addEventListener("touchend",e=>{ e.preventDefault(); pad.classList.remove("active"); },{passive:false});
+    if(!touchListenersAttached){
+      touchListenersAttached=true;
+      for(let i=0;i<NUM_LANES;i++){
+        const pad=document.getElementById("tp"+i);
+        pad.textContent=LANES[i].label; pad.style.color=LANES[i].color;
+        pad.style.borderColor=LANES[i].color+"44";
+        pad.addEventListener("touchstart",e=>{ e.preventDefault(); pad.classList.add("active"); processHit(i); },{passive:false});
+        pad.addEventListener("touchend",e=>{ e.preventDefault(); pad.classList.remove("active"); },{passive:false});
+        pad.addEventListener("pointerdown",e=>{ if(e.pointerType==="touch"){e.preventDefault(); pad.classList.add("active"); processHit(i);} });
+        pad.addEventListener("pointerup",e=>{ if(e.pointerType==="touch") pad.classList.remove("active"); });
+      }
+      canvas.addEventListener("touchstart",e=>{
+        e.preventDefault();
+        const rect=canvas.getBoundingClientRect();
+        const x=(e.touches[0].clientX-rect.left)/rect.width*CANVAS_W;
+        const y=(e.touches[0].clientY-rect.top)/rect.height*CANVAS_H;
+        menuTouch(x,y);
+      },{passive:false});
+      canvas.addEventListener("pointerdown",e=>{
+        if(e.pointerType!=="touch") return;
+        const rect=canvas.getBoundingClientRect();
+        const x=(e.clientX-rect.left)/rect.width*CANVAS_W;
+        const y=(e.clientY-rect.top)/rect.height*CANVAS_H;
+        menuTouch(x,y);
+      });
     }
-    canvas.addEventListener("touchstart",e=>{
-      e.preventDefault();
-      const rect=canvas.getBoundingClientRect();
-      const x=(e.touches[0].clientX-rect.left)/rect.width*CANVAS_W;
-      const y=(e.touches[0].clientY-rect.top)/rect.height*CANVAS_H;
-      menuTouch(x,y);
-    },{passive:false});
   } else { tpEl.style.display="none"; }
 }
 function menuTouch(x,y){
@@ -500,7 +516,8 @@ function settAction(dir){
     i=(i+dir+ks.length)%ks.length; settings.theme=ks[i];
   } else if(item==="Touch Controls"){
     settings.touchEnabled=!settings.touchEnabled;
-    tpEl.style.display=settings.touchEnabled?"block":"none";
+    if(settings.touchEnabled) setupTouch();
+    else tpEl.style.display="none";
   } else if(item==="Calibrate Latency"){ if(dir>0) startCal(); }
   else if(item==="Import Song JSON"){ if(dir>0) importJSON(); }
   else if(item==="Back"){ saveSettings(); gameState="menu"; }
