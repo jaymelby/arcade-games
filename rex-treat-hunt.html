@@ -1,0 +1,1862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rex's Treat Hunt</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; overflow: hidden;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  canvas {
+    border: 3px solid #5a3a1a;
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(0,0,0,.5);
+    cursor: none;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+//  REX'S TREAT HUNT — Complete Single-File Game
+// ============================================================
+
+const C = document.getElementById('game');
+const ctx = C.getContext('2d');
+const CANVAS_W = 960, CANVAS_H = 640;
+C.width = CANVAS_W; C.height = CANVAS_H;
+
+// ── World ───────────────────────────────────────────────────
+const WORLD_W = 1600, WORLD_H = 1100;
+const WALL_T = 24;
+
+// ── Patio (cool-down zone near bottom-center) ──────────────
+const PATIO = { x: 480, y: 820, w: 500, h: 260 };
+const SHADE_ZONES = [
+  { x: PATIO.x + 20, y: PATIO.y + 20, w: 140, h: 100 },
+  { x: PATIO.x + 320, y: PATIO.y + 20, w: 140, h: 100 }
+];
+
+// ── Rex ─────────────────────────────────────────────────────
+const REX_R = 18;
+const REX_SPEED = 200;
+const REX_SLOW_SPEED = 90;
+const ZOOMIES_MULT = 1.6;
+
+// ── Stamina ─────────────────────────────────────────────────
+const STAMINA_MAX = 100;
+const STAMINA_DRAIN = 7;
+const STAMINA_REGEN = 30;
+const STAMINA_SLOW_THRESH = 0;
+
+// ── Sniff Radar ─────────────────────────────────────────────
+const SNIFF_MAX_DIST = 600;
+const RADAR_COLD_INTERVAL = 1.8;
+const RADAR_HOT_INTERVAL = 0.25;
+const RADAR_MAX_RADIUS = 120;
+
+// ── Bones / Digging ────────────────────────────────────────
+const DIG_RANGE = 42;
+const BASE_BONES = 5;
+
+// ── Squirrel ────────────────────────────────────────────────
+const SQUIRREL_MIN_INT = 15;
+const SQUIRREL_MAX_INT = 20;
+const SQUIRREL_CHASE_DUR = 3;
+const SQUIRREL_SPEED = 250;
+const SQUIRREL_DETECT_R = 130;
+
+// ── Time Attack ─────────────────────────────────────────────
+const TIME_BASE = 75;
+const TIME_BONUS = 8;
+
+// ── Colors ──────────────────────────────────────────────────
+const COL = {
+  grass1:'#4a8c2a', grass2:'#5a9e3a', grass3:'#3e7a22',
+  dirt:'#c4a76c', dirtDark:'#a88c52',
+  patio:'#c8bfae', patioLine:'#b0a898',
+  wall:'#b8845a', wallDark:'#9a6e42', wallLight:'#d4a872',
+  water:'rgba(100,180,240,0.3)',
+  rexBody:'#c89040', rexSaddle:'#3a2415', rexBelly:'#ddb06a',
+  rexNose:'#1a1a1a', rexEye:'#2a1a0a', rexTongue:'#e87090',
+  rexEarInner:'#c89040', rexEarTip:'#3a2415',
+  rexPaw:'#ddb06a',
+  cactus:'#2d7a2d', cactusDark:'#1a5c1a', cactusFlower:'#ff6090',
+  agave:'#4a8a5a', agaveDark:'#2a6a3a',
+  chairFrame:'#d4d4d4', chairSeat:'#4488cc',
+  rock:'#8a8278', rockLight:'#a8a090',
+  squirrel:'#8a5e3a', squirrelBelly:'#d4a870',
+  bone:'#f0e8d8', boneDark:'#d4ccb8'
+};
+
+// ============================================================
+//  AUDIO — Web Audio API
+// ============================================================
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playBark() {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(500, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.08);
+  o.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.15);
+  g.gain.setValueAtTime(0.25, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.25);
+}
+
+function playDig() {
+  ensureAudio();
+  const bufSize = audioCtx.sampleRate * 0.15;
+  const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const filt = audioCtx.createBiquadFilter();
+  filt.type = 'bandpass'; filt.frequency.value = 800; filt.Q.value = 1.5;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+  src.connect(filt).connect(g).connect(audioCtx.destination);
+  src.start(); src.stop(audioCtx.currentTime + 0.15);
+}
+
+function playDigFail() {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(200, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+  g.gain.setValueAtTime(0.12, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.2);
+}
+
+function playSquirrelChirp() {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(1800, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(2400, audioCtx.currentTime + 0.05);
+  o.frequency.exponentialRampToValueAtTime(1600, audioCtx.currentTime + 0.1);
+  g.gain.setValueAtTime(0.08, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.12);
+}
+
+function playBonePopup() {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(600, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(1400, audioCtx.currentTime + 0.12);
+  g.gain.setValueAtTime(0.2, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.35);
+}
+
+let mistNode = null, mistGain = null;
+function startMistSound() {
+  ensureAudio();
+  if (mistNode) return;
+  const bufSize = audioCtx.sampleRate * 2;
+  const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1;
+  mistNode = audioCtx.createBufferSource();
+  mistNode.buffer = buf; mistNode.loop = true;
+  const filt = audioCtx.createBiquadFilter();
+  filt.type = 'lowpass'; filt.frequency.value = 1200;
+  mistGain = audioCtx.createGain();
+  mistGain.gain.value = 0;
+  mistNode.connect(filt).connect(mistGain).connect(audioCtx.destination);
+  mistNode.start();
+}
+function setMistVolume(v) {
+  if (mistGain) mistGain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.1);
+}
+
+function playLevelComplete() {
+  ensureAudio();
+  const notes = [523, 659, 784, 1047];
+  notes.forEach((f, i) => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.12);
+    g.gain.linearRampToValueAtTime(0.18, audioCtx.currentTime + i * 0.12 + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i * 0.12 + 0.4);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(audioCtx.currentTime + i * 0.12);
+    o.stop(audioCtx.currentTime + i * 0.12 + 0.4);
+  });
+}
+
+// ============================================================
+//  PARTICLE SYSTEM
+// ============================================================
+const particles = [];
+
+function spawnParticle(x, y, vx, vy, life, size, color, gravity, fade) {
+  particles.push({ x, y, vx, vy, life, maxLife: life, size, color, gravity: gravity || 0, fade: fade !== false });
+}
+
+function spawnDirtBurst(x, y) {
+  for (let i = 0; i < 18; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 80 + Math.random() * 160;
+    const sz = 2 + Math.random() * 4;
+    const c = Math.random() < 0.5 ? COL.dirt : COL.dirtDark;
+    spawnParticle(x, y, Math.cos(ang) * spd, Math.sin(ang) * spd - 60, 0.6 + Math.random() * 0.4, sz, c, 300, true);
+  }
+}
+
+function spawnBoneStars(x, y) {
+  for (let i = 0; i < 12; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 50 + Math.random() * 100;
+    spawnParticle(x, y, Math.cos(ang) * spd, Math.sin(ang) * spd, 0.6 + Math.random() * 0.3, 3, '#ffe040', 0, true);
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.vy += p.gravity * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles(camX, camY) {
+  for (const p of particles) {
+    const alpha = p.fade ? Math.max(0, p.life / p.maxLife) : 1;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x - camX, p.y - camY, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── Mist Particles (separate system for patio) ─────────────
+const mistParticles = [];
+function spawnMistParticle() {
+  mistParticles.push({
+    x: PATIO.x + 10 + Math.random() * (PATIO.w - 20),
+    y: PATIO.y + Math.random() * 20,
+    vx: (Math.random() - 0.5) * 15,
+    vy: 10 + Math.random() * 25,
+    life: 2 + Math.random() * 2,
+    maxLife: 3,
+    size: 4 + Math.random() * 8,
+    alpha: 0.15 + Math.random() * 0.2
+  });
+}
+function updateMistParticles(dt) {
+  for (let i = mistParticles.length - 1; i >= 0; i--) {
+    const p = mistParticles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0 || p.y > PATIO.y + PATIO.h) mistParticles.splice(i, 1);
+  }
+  // Spawn new
+  if (mistParticles.length < 60 && Math.random() < dt * 20) spawnMistParticle();
+}
+function drawMistParticles(camX, camY) {
+  for (const p of mistParticles) {
+    const fade = Math.min(1, p.life / p.maxLife);
+    ctx.globalAlpha = p.alpha * fade;
+    ctx.fillStyle = Math.random() < 0.3 ? 'rgba(180,220,255,1)' : 'rgba(240,248,255,1)';
+    ctx.beginPath();
+    ctx.arc(p.x - camX, p.y - camY, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+//  ENVIRONMENT PRE-RENDER
+// ============================================================
+const bgCanvas = document.createElement('canvas');
+bgCanvas.width = WORLD_W; bgCanvas.height = WORLD_H;
+const bgCtx = bgCanvas.getContext('2d');
+
+// Grass tile generation
+function renderBackground() {
+  const bc = bgCtx;
+
+  // Base grass
+  bc.fillStyle = COL.grass1;
+  bc.fillRect(0, 0, WORLD_W, WORLD_H);
+
+  // Grass texture variation
+  const rng = mulberry32(42);
+  for (let gy = 0; gy < WORLD_H; gy += 8) {
+    for (let gx = 0; gx < WORLD_W; gx += 8) {
+      const r = rng();
+      if (r < 0.35) {
+        bc.fillStyle = r < 0.15 ? COL.grass3 : COL.grass2;
+        bc.fillRect(gx, gy, 8, 8);
+      }
+    }
+  }
+
+  // Grass blades
+  for (let i = 0; i < 3000; i++) {
+    const bx = rng() * WORLD_W;
+    const by = rng() * WORLD_H;
+    const h = 3 + rng() * 5;
+    bc.strokeStyle = rng() < 0.5 ? '#3e8520' : '#5aaa38';
+    bc.lineWidth = 1;
+    bc.beginPath();
+    bc.moveTo(bx, by);
+    bc.lineTo(bx + (rng() - 0.5) * 4, by - h);
+    bc.stroke();
+  }
+
+  // Dirt patches
+  const dirtPatches = [
+    { x: 300, y: 300, r: 50 }, { x: 800, y: 200, r: 40 }, { x: 1100, y: 500, r: 55 },
+    { x: 500, y: 600, r: 35 }, { x: 1300, y: 300, r: 45 }, { x: 200, y: 700, r: 38 },
+    { x: 900, y: 700, r: 42 }, { x: 1400, y: 800, r: 35 }
+  ];
+  for (const dp of dirtPatches) {
+    const grad = bc.createRadialGradient(dp.x, dp.y, 0, dp.x, dp.y, dp.r);
+    grad.addColorStop(0, COL.dirt);
+    grad.addColorStop(0.7, COL.dirtDark);
+    grad.addColorStop(1, 'transparent');
+    bc.fillStyle = grad;
+    bc.beginPath();
+    bc.arc(dp.x, dp.y, dp.r, 0, Math.PI * 2);
+    bc.fill();
+  }
+
+  // Patio
+  bc.fillStyle = COL.patio;
+  bc.fillRect(PATIO.x, PATIO.y, PATIO.w, PATIO.h);
+  // Patio tile lines
+  bc.strokeStyle = COL.patioLine;
+  bc.lineWidth = 1;
+  for (let px = PATIO.x; px < PATIO.x + PATIO.w; px += 48) {
+    bc.beginPath(); bc.moveTo(px, PATIO.y); bc.lineTo(px, PATIO.y + PATIO.h); bc.stroke();
+  }
+  for (let py = PATIO.y; py < PATIO.y + PATIO.h; py += 48) {
+    bc.beginPath(); bc.moveTo(PATIO.x, py); bc.lineTo(PATIO.x + PATIO.w, py); bc.stroke();
+  }
+  // Patio border
+  bc.strokeStyle = '#8a7a68';
+  bc.lineWidth = 3;
+  bc.strokeRect(PATIO.x, PATIO.y, PATIO.w, PATIO.h);
+
+  // Shade structure posts
+  for (const sz of SHADE_ZONES) {
+    bc.fillStyle = 'rgba(60,40,20,0.15)';
+    bc.fillRect(sz.x, sz.y, sz.w, sz.h);
+    bc.strokeStyle = '#6a5a48';
+    bc.lineWidth = 4;
+    // Posts at corners
+    const postR = 4;
+    [[sz.x, sz.y], [sz.x + sz.w, sz.y], [sz.x, sz.y + sz.h], [sz.x + sz.w, sz.y + sz.h]].forEach(([px, py]) => {
+      bc.fillStyle = '#7a6a58';
+      bc.beginPath(); bc.arc(px, py, postR, 0, Math.PI * 2); bc.fill();
+      bc.strokeStyle = '#5a4a38';
+      bc.beginPath(); bc.arc(px, py, postR, 0, Math.PI * 2); bc.stroke();
+    });
+    // Shade fabric strips
+    bc.fillStyle = 'rgba(200,180,140,0.25)';
+    for (let sy = sz.y; sy < sz.y + sz.h; sy += 14) {
+      bc.fillRect(sz.x, sy, sz.w, 8);
+    }
+  }
+
+  // Block wall
+  bc.fillStyle = COL.wall;
+  // Top wall
+  bc.fillRect(0, 0, WORLD_W, WALL_T);
+  // Bottom wall
+  bc.fillRect(0, WORLD_H - WALL_T, WORLD_W, WALL_T);
+  // Left wall
+  bc.fillRect(0, 0, WALL_T, WORLD_H);
+  // Right wall
+  bc.fillRect(WORLD_W - WALL_T, 0, WALL_T, WORLD_H);
+
+  // Wall bricks
+  bc.strokeStyle = COL.wallDark;
+  bc.lineWidth = 1;
+  const brickW = 32, brickH = WALL_T;
+  // Top & Bottom walls
+  for (let bx = 0; bx < WORLD_W; bx += brickW) {
+    bc.strokeRect(bx, 0, brickW, brickH);
+    bc.strokeRect(bx + brickW / 2, WORLD_H - WALL_T, brickW, brickH);
+  }
+  // Left & Right walls
+  for (let by = 0; by < WORLD_H; by += brickW) {
+    bc.strokeRect(0, by, WALL_T, brickW);
+    bc.strokeRect(WORLD_W - WALL_T, by + brickW / 2, WALL_T, brickW);
+  }
+  // Wall cap highlight
+  bc.fillStyle = COL.wallLight;
+  bc.fillRect(0, 0, WORLD_W, 4);
+  bc.fillRect(0, 0, 4, WORLD_H);
+
+  // "House" wall along bottom behind patio
+  bc.fillStyle = '#d4c4a8';
+  bc.fillRect(PATIO.x - 40, WORLD_H - WALL_T - 8, PATIO.w + 80, WALL_T + 8);
+  bc.fillStyle = '#c4b498';
+  bc.fillRect(PATIO.x - 40, WORLD_H - WALL_T - 8, PATIO.w + 80, 6);
+  // Door
+  bc.fillStyle = '#6a4a30';
+  bc.fillRect(PATIO.x + PATIO.w / 2 - 25, WORLD_H - WALL_T - 6, 50, WALL_T + 6);
+  bc.fillStyle = '#f0d080';
+  bc.beginPath(); bc.arc(PATIO.x + PATIO.w / 2 + 15, WORLD_H - WALL_T + 10, 3, 0, Math.PI * 2); bc.fill();
+}
+
+// Seeded RNG for deterministic grass
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ============================================================
+//  OBSTACLES & DECORATIONS
+// ============================================================
+const obstacles = []; // {x, y, w, h, type}
+const decorations = []; // visual only (no collision)
+
+function generateObstacles() {
+  obstacles.length = 0;
+  decorations.length = 0;
+
+  // Cacti along walls
+  const cactiPos = [
+    { x: 60, y: 60 }, { x: 200, y: 50 }, { x: 450, y: 55 }, { x: 700, y: 50 },
+    { x: 1000, y: 55 }, { x: 1250, y: 60 }, { x: 1450, y: 50 },
+    { x: 50, y: 200 }, { x: 50, y: 500 }, { x: 50, y: 750 },
+    { x: WORLD_W - 55, y: 150 }, { x: WORLD_W - 60, y: 400 }, { x: WORLD_W - 55, y: 650 },
+    { x: WORLD_W - 60, y: 900 }, { x: 150, y: WORLD_H - 60 }, { x: 350, y: WORLD_H - 55 },
+    { x: 1100, y: WORLD_H - 58 }, { x: 1350, y: WORLD_H - 55 }
+  ];
+  for (const c of cactiPos) {
+    obstacles.push({ x: c.x - 12, y: c.y - 12, w: 24, h: 24, type: 'cactus', cx: c.x, cy: c.y });
+  }
+
+  // Agave/bushes
+  const agavePos = [
+    { x: 130, y: 130 }, { x: 380, y: 100 }, { x: 850, y: 80 },
+    { x: 1150, y: 100 }, { x: 100, y: 400 }, { x: WORLD_W - 100, y: 300 },
+    { x: 1400, y: 750 }, { x: 120, y: 900 }
+  ];
+  for (const a of agavePos) {
+    obstacles.push({ x: a.x - 18, y: a.y - 14, w: 36, h: 28, type: 'agave', cx: a.x, cy: a.y });
+  }
+
+  // Lawn chairs
+  const chairPos = [
+    { x: 400, y: 400 }, { x: 700, y: 550 }, { x: 1100, y: 350 },
+    { x: 250, y: 550 }, { x: 1300, y: 600 }
+  ];
+  for (const ch of chairPos) {
+    obstacles.push({ x: ch.x - 16, y: ch.y - 22, w: 32, h: 44, type: 'chair', cx: ch.x, cy: ch.y });
+  }
+
+  // Rocks
+  const rockPos = [
+    { x: 600, y: 250 }, { x: 950, y: 450 }, { x: 300, y: 750 }, { x: 1250, y: 200 }
+  ];
+  for (const r of rockPos) {
+    obstacles.push({ x: r.x - 14, y: r.y - 10, w: 28, h: 20, type: 'rock', cx: r.x, cy: r.y });
+  }
+}
+
+function drawObstacle(ob, camX, camY) {
+  const ox = ob.cx - camX, oy = ob.cy - camY;
+  ctx.save();
+  ctx.translate(ox, oy);
+
+  if (ob.type === 'cactus') {
+    // Main stem
+    ctx.fillStyle = COL.cactus;
+    roundRect(-5, -16, 10, 28, 4);
+    // Left arm
+    ctx.fillStyle = COL.cactus;
+    roundRect(-14, -10, 10, 6, 3);
+    roundRect(-14, -14, 6, 10, 3);
+    // Right arm
+    roundRect(4, -6, 10, 6, 3);
+    roundRect(8, -12, 6, 12, 3);
+    // Spines
+    ctx.strokeStyle = '#88cc88';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 6; i++) {
+      const sy = -14 + i * 5;
+      ctx.beginPath(); ctx.moveTo(-5, sy); ctx.lineTo(-8, sy - 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(5, sy); ctx.lineTo(8, sy - 2); ctx.stroke();
+    }
+    // Flower on top
+    if (ob.cx % 3 === 0) {
+      ctx.fillStyle = COL.cactusFlower;
+      ctx.beginPath(); ctx.arc(0, -18, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff90b0';
+      ctx.beginPath(); ctx.arc(-2, -19, 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  else if (ob.type === 'agave') {
+    // Agave: fan of thick pointed leaves
+    for (let i = -3; i <= 3; i++) {
+      const ang = (i * 0.35) - Math.PI / 2;
+      const len = 16 + Math.abs(i) * 2;
+      ctx.fillStyle = i % 2 === 0 ? COL.agave : COL.agaveDark;
+      ctx.beginPath();
+      ctx.moveTo(0, 4);
+      ctx.lineTo(Math.cos(ang) * len - 3, Math.sin(ang) * len);
+      ctx.lineTo(Math.cos(ang) * len + 3, Math.sin(ang) * len);
+      ctx.fill();
+    }
+    // Center
+    ctx.fillStyle = '#5aaa6a';
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  else if (ob.type === 'chair') {
+    // Lawn chair from above
+    ctx.fillStyle = COL.chairSeat;
+    roundRect(-12, -18, 24, 36, 3);
+    // Stripes
+    ctx.fillStyle = '#fff';
+    for (let sy = -14; sy < 16; sy += 8) {
+      ctx.fillRect(-10, sy, 20, 3);
+    }
+    // Frame
+    ctx.strokeStyle = COL.chairFrame;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-14, -20, 28, 40);
+    // Legs
+    ctx.fillStyle = COL.chairFrame;
+    [[-14, -20], [14, -20], [-14, 20], [14, 20]].forEach(([lx, ly]) => {
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+
+  else if (ob.type === 'rock') {
+    ctx.fillStyle = COL.rock;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 14, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.rockLight;
+    ctx.beginPath();
+    ctx.ellipse(-3, -3, 8, 5, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#706860';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 14, 10, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.fill();
+}
+
+// ============================================================
+//  REX SPRITE — 4-direction, animated walk
+// ============================================================
+function drawRex(x, y, dir, walkPhase, camX, camY, isChasing, isExhausted) {
+  const sx = x - camX, sy = y - camY;
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  // dir: 0=down, 1=up, 2=left, 3=right
+  const angles = [0, Math.PI, Math.PI / 2, -Math.PI / 2];
+  ctx.rotate(angles[dir]);
+
+  const pawOff = Math.sin(walkPhase * 12) * 5;
+  const tailWag = Math.sin(walkPhase * 8) * 0.3;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, 16, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tail
+  ctx.save();
+  ctx.translate(0, -18);
+  ctx.rotate(tailWag);
+  ctx.fillStyle = COL.rexSaddle;
+  ctx.beginPath();
+  ctx.ellipse(0, -6, 4, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = COL.rexBody;
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 3, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Back paws
+  ctx.fillStyle = COL.rexPaw;
+  ctx.beginPath(); ctx.ellipse(-10, -10 - pawOff, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(10, -10 + pawOff, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Body
+  ctx.fillStyle = COL.rexBody;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 13, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Saddle marking
+  ctx.fillStyle = COL.rexSaddle;
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 10, 11, 0, Math.PI * 0.95, Math.PI * 2.05);
+  ctx.fill();
+
+  // Belly highlight
+  ctx.fillStyle = COL.rexBelly;
+  ctx.beginPath();
+  ctx.ellipse(0, 6, 7, 6, 0, 0, Math.PI);
+  ctx.fill();
+
+  // Front paws
+  ctx.fillStyle = COL.rexPaw;
+  ctx.beginPath(); ctx.ellipse(-9, 12 + pawOff, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(9, 12 - pawOff, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Head
+  ctx.fillStyle = COL.rexBody;
+  ctx.beginPath();
+  ctx.ellipse(0, 16, 11, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ears
+  ctx.fillStyle = COL.rexEarTip;
+  drawEar(-9, 11, -1);
+  drawEar(9, 11, 1);
+
+  // Inner ears
+  ctx.fillStyle = '#d4a060';
+  ctx.beginPath(); ctx.ellipse(-8, 12, 3, 4, -0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(8, 12, 3, 4, 0.2, 0, Math.PI * 2); ctx.fill();
+
+  // Face details
+  // Snout
+  ctx.fillStyle = COL.rexBelly;
+  ctx.beginPath();
+  ctx.ellipse(0, 20, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = COL.rexEye;
+  ctx.beginPath(); ctx.ellipse(-5, 16, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(5, 16, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+  // Eye highlights
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-4, 15, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(6, 15, 1.2, 0, Math.PI * 2); ctx.fill();
+
+  // Nose
+  ctx.fillStyle = COL.rexNose;
+  ctx.beginPath();
+  ctx.ellipse(0, 22, 3, 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tongue (when chasing or happy)
+  if (isChasing || walkPhase % 3 < 0.5) {
+    ctx.fillStyle = COL.rexTongue;
+    ctx.beginPath();
+    ctx.ellipse(3, 25, 2.5, 4, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Exhaustion indicator
+  if (isExhausted) {
+    ctx.fillStyle = 'rgba(255,100,100,0.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText('💦', -12, -22);
+  }
+
+  ctx.restore();
+}
+
+function drawEar(ex, ey, side) {
+  ctx.beginPath();
+  ctx.moveTo(ex, ey + 6);
+  ctx.lineTo(ex + side * 5, ey - 8);
+  ctx.lineTo(ex - side * 2, ey - 2);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ============================================================
+//  SNIFF RADAR RINGS
+// ============================================================
+const radarRings = [];
+let radarTimer = 0;
+
+function updateRadar(dt, proximity) {
+  const interval = lerp(RADAR_COLD_INTERVAL, RADAR_HOT_INTERVAL, proximity);
+  radarTimer += dt;
+  if (radarTimer >= interval) {
+    radarTimer -= interval;
+    radarRings.push({ r: 10, maxR: RADAR_MAX_RADIUS, life: 1.2, proximity });
+  }
+  for (let i = radarRings.length - 1; i >= 0; i--) {
+    const ring = radarRings[i];
+    ring.r += dt * (60 + proximity * 100);
+    ring.life -= dt;
+    if (ring.life <= 0 || ring.r > ring.maxR) radarRings.splice(i, 1);
+  }
+}
+
+function drawRadar(rx, ry, camX, camY) {
+  const sx = rx - camX, sy = ry - camY;
+  for (const ring of radarRings) {
+    const p = ring.proximity;
+    const alpha = Math.max(0, ring.life / 1.2) * 0.6;
+    let color;
+    if (p < 0.33) color = `rgba(80,140,255,${alpha})`;
+    else if (p < 0.66) color = `rgba(255,220,60,${alpha})`;
+    else color = `rgba(255,70,50,${alpha})`;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 + p * 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, ring.r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+//  BONES
+// ============================================================
+function generateBones(count) {
+  const bones = [];
+  const margin = 80;
+  let attempts = 0;
+  while (bones.length < count && attempts < 500) {
+    attempts++;
+    const bx = margin + Math.random() * (WORLD_W - margin * 2);
+    const by = margin + Math.random() * (WORLD_H - margin * 2 - 200); // not on patio row
+
+    // Not on patio
+    if (bx > PATIO.x - 20 && bx < PATIO.x + PATIO.w + 20 &&
+        by > PATIO.y - 20 && by < PATIO.y + PATIO.h + 20) continue;
+
+    // Not on obstacles
+    let onObs = false;
+    for (const ob of obstacles) {
+      if (bx > ob.x - 30 && bx < ob.x + ob.w + 30 &&
+          by > ob.y - 30 && by < ob.y + ob.h + 30) { onObs = true; break; }
+    }
+    if (onObs) continue;
+
+    // Not too close to other bones
+    let tooClose = false;
+    for (const b of bones) {
+      if (Math.hypot(b.x - bx, b.y - by) < 80) { tooClose = true; break; }
+    }
+    if (tooClose) continue;
+
+    bones.push({ x: bx, y: by, found: false, popTimer: 0 });
+  }
+  return bones;
+}
+
+function drawBone(x, y, camX, camY, found, popTimer) {
+  const sx = x - camX, sy = y - camY;
+
+  if (!found) {
+    // Subtle ground hint (small dirt bump)
+    ctx.fillStyle = 'rgba(160,130,80,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  // Found bone with pop animation
+  const scale = popTimer < 0.3 ? 0.5 + (popTimer / 0.3) * 1.5 : 1;
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(scale, scale);
+
+  // Bone shape
+  ctx.fillStyle = COL.bone;
+  ctx.strokeStyle = COL.boneDark;
+  ctx.lineWidth = 1.5;
+
+  // Shaft
+  ctx.beginPath();
+  ctx.roundRect(-10, -3, 20, 6, 2);
+  ctx.fill(); ctx.stroke();
+
+  // Left knobs
+  ctx.beginPath(); ctx.arc(-10, -4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(-10, 4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Right knobs
+  ctx.beginPath(); ctx.arc(10, -4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(10, 4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Shine
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.ellipse(-2, -3, 6, 2, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ============================================================
+//  SQUIRREL
+// ============================================================
+function createSquirrel() {
+  const side = Math.floor(Math.random() * 4); // 0=top,1=bottom,2=left,3=right
+  let sx, sy, tx, ty;
+  const m = 50;
+  if (side === 0) { sx = m + Math.random() * (WORLD_W - m * 2); sy = WALL_T; tx = m + Math.random() * (WORLD_W - m * 2); ty = WORLD_H - WALL_T; }
+  else if (side === 1) { sx = m + Math.random() * (WORLD_W - m * 2); sy = WORLD_H - WALL_T; tx = m + Math.random() * (WORLD_W - m * 2); ty = WALL_T; }
+  else if (side === 2) { sx = WALL_T; sy = m + Math.random() * (WORLD_H - m * 2); tx = WORLD_W - WALL_T; ty = m + Math.random() * (WORLD_H - m * 2); }
+  else { sx = WORLD_W - WALL_T; sy = m + Math.random() * (WORLD_H - m * 2); tx = WALL_T; ty = m + Math.random() * (WORLD_H - m * 2); }
+
+  const ang = Math.atan2(ty - sy, tx - sx);
+  return {
+    x: sx, y: sy,
+    vx: Math.cos(ang) * SQUIRREL_SPEED,
+    vy: Math.sin(ang) * SQUIRREL_SPEED,
+    active: true, detected: false, tailPhase: 0
+  };
+}
+
+function drawSquirrel(sq, camX, camY) {
+  if (!sq || !sq.active) return;
+  const sx = sq.x - camX, sy = sq.y - camY;
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  // Face movement direction
+  const ang = Math.atan2(sq.vy, sq.vx);
+  ctx.rotate(ang + Math.PI / 2);
+
+  // Tail
+  const tw = Math.sin(sq.tailPhase * 10) * 0.4;
+  ctx.save();
+  ctx.translate(0, -12);
+  ctx.rotate(tw);
+  ctx.fillStyle = COL.squirrel;
+  ctx.beginPath();
+  ctx.ellipse(0, -10, 5, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#a8724a';
+  ctx.beginPath();
+  ctx.ellipse(0, -8, 3, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Body
+  ctx.fillStyle = COL.squirrel;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 7, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Belly
+  ctx.fillStyle = COL.squirrelBelly;
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 5, 6, 0, 0, Math.PI);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = COL.squirrel;
+  ctx.beginPath();
+  ctx.arc(0, 11, 6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ears
+  ctx.beginPath(); ctx.arc(-5, 14, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(5, 14, 2.5, 0, Math.PI * 2); ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath(); ctx.arc(-3, 12, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(3, 12, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-2.5, 11.5, 0.7, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(3.5, 11.5, 0.7, 0, Math.PI * 2); ctx.fill();
+
+  // Nose
+  ctx.fillStyle = '#2a1a0a';
+  ctx.beginPath(); ctx.arc(0, 15, 1.5, 0, Math.PI * 2); ctx.fill();
+
+  // Alert indicator
+  if (sq.detected) {
+    ctx.fillStyle = '#ff4040';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('!', 0, -24);
+  }
+
+  ctx.restore();
+}
+
+// ============================================================
+//  GAME STATE
+// ============================================================
+let state = 'menu'; // menu, playing, levelComplete, gameOver, win
+let gameMode = 'explore'; // explore, timeAttack
+
+let rex = { x: 0, y: 0, dir: 0, walkPhase: 0, moving: false };
+let stamina = STAMINA_MAX;
+let bones = [];
+let bonesFound = 0;
+let totalBones = 0;
+let level = 1;
+let score = 0;
+let timeLeft = 0;
+let cam = { x: 0, y: 0 };
+
+let squirrel = null;
+let squirrelTimer = 0;
+let chaseTimer = 0;
+let isChasing = false;
+
+let sniffProximity = 0;
+let digCooldown = 0;
+
+// UI animations
+let screenShake = 0;
+let messageText = '';
+let messageTimer = 0;
+let bonePops = []; // {x, y, timer}
+let menuPupAnim = 0;
+let levelStartCountdown = 0;
+
+// Title screen particles
+const titleParticles = [];
+
+// ── Input ───────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === ' ') { e.preventDefault(); keys['space'] = true; }
+  if (e.key === 'Enter') keys['enter'] = true;
+
+  // Audio context needs user gesture
+  ensureAudio();
+  startMistSound();
+});
+window.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+  if (e.key === ' ') keys['space'] = false;
+  if (e.key === 'Enter') keys['enter'] = false;
+});
+
+// Mouse for menu
+let mouseX = 0, mouseY = 0, mouseDown = false, mouseClicked = false;
+C.addEventListener('mousemove', e => {
+  const r = C.getBoundingClientRect();
+  mouseX = (e.clientX - r.left) * (CANVAS_W / r.width);
+  mouseY = (e.clientY - r.top) * (CANVAS_H / r.height);
+});
+C.addEventListener('mousedown', () => { mouseDown = true; mouseClicked = true; ensureAudio(); startMistSound(); });
+C.addEventListener('mouseup', () => { mouseDown = false; });
+
+// ============================================================
+//  GAME INIT / LEVEL START
+// ============================================================
+function initLevel() {
+  const numBones = BASE_BONES + (level - 1) * 2;
+  totalBones = numBones;
+  bonesFound = 0;
+  bones = generateBones(numBones);
+  stamina = STAMINA_MAX;
+  rex.x = PATIO.x + PATIO.w / 2;
+  rex.y = PATIO.y + PATIO.h / 2;
+  rex.dir = 1;
+  rex.walkPhase = 0;
+  squirrel = null;
+  squirrelTimer = SQUIRREL_MIN_INT + Math.random() * (SQUIRREL_MAX_INT - SQUIRREL_MIN_INT);
+  chaseTimer = 0;
+  isChasing = false;
+  digCooldown = 0;
+  radarRings.length = 0;
+  radarTimer = 0;
+  particles.length = 0;
+  screenShake = 0;
+  messageText = '';
+  messageTimer = 0;
+
+  if (gameMode === 'timeAttack') {
+    timeLeft = TIME_BASE + (level - 1) * 5;
+  }
+
+  levelStartCountdown = 2;
+}
+
+function startGame(mode) {
+  gameMode = mode;
+  level = 1;
+  score = 0;
+  state = 'playing';
+  initLevel();
+}
+
+// ============================================================
+//  COLLISION HELPERS
+// ============================================================
+function rectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+function isOnPatio(x, y) {
+  return x > PATIO.x && x < PATIO.x + PATIO.w && y > PATIO.y && y < PATIO.y + PATIO.h;
+}
+
+function isInShade(x, y) {
+  for (const sz of SHADE_ZONES) {
+    if (x > sz.x && x < sz.x + sz.w && y > sz.y && y < sz.y + sz.h) return true;
+  }
+  return false;
+}
+
+function canMoveTo(x, y) {
+  const r = REX_R - 2;
+  // World bounds
+  if (x - r < WALL_T || x + r > WORLD_W - WALL_T) return false;
+  if (y - r < WALL_T || y + r > WORLD_H - WALL_T) return false;
+  // Obstacles
+  for (const ob of obstacles) {
+    if (rectOverlap(x - r, y - r, r * 2, r * 2, ob.x, ob.y, ob.w, ob.h)) return false;
+  }
+  return true;
+}
+
+// ============================================================
+//  UPDATE
+// ============================================================
+function update(dt) {
+  if (state === 'menu') {
+    menuPupAnim += dt;
+    // Title particles
+    if (Math.random() < dt * 5) {
+      titleParticles.push({
+        x: Math.random() * CANVAS_W,
+        y: CANVAS_H + 10,
+        vy: -30 - Math.random() * 40,
+        vx: (Math.random() - 0.5) * 20,
+        life: 3 + Math.random() * 2,
+        size: 2 + Math.random() * 3,
+        color: ['#ffe040', '#ff9040', '#40ff90', '#40c0ff'][Math.floor(Math.random() * 4)]
+      });
+    }
+    for (let i = titleParticles.length - 1; i >= 0; i--) {
+      const p = titleParticles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) titleParticles.splice(i, 1);
+    }
+    return;
+  }
+
+  if (state === 'levelComplete' || state === 'gameOver' || state === 'win') return;
+
+  // Countdown
+  if (levelStartCountdown > 0) {
+    levelStartCountdown -= dt;
+    return;
+  }
+
+  // Time attack
+  if (gameMode === 'timeAttack') {
+    timeLeft -= dt;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      state = 'gameOver';
+      return;
+    }
+  }
+
+  // ── Squirrel chase ──
+  if (isChasing) {
+    chaseTimer -= dt;
+    if (chaseTimer <= 0) {
+      isChasing = false;
+      showMessage('Rex snaps out of it!', 1.5);
+    } else {
+      // Auto-chase squirrel
+      if (squirrel && squirrel.active) {
+        const dx = squirrel.x - rex.x;
+        const dy = squirrel.y - rex.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 5) {
+          const speed = REX_SPEED * 1.3;
+          rex.x += (dx / dist) * speed * dt;
+          rex.y += (dy / dist) * speed * dt;
+          rex.dir = getDir(dx, dy);
+          rex.moving = true;
+          rex.walkPhase += dt;
+        }
+      }
+    }
+  }
+
+  // ── Rex movement ──
+  if (!isChasing) {
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy = -1;
+    if (keys['s'] || keys['arrowdown']) dy = 1;
+    if (keys['a'] || keys['arrowleft']) dx = -1;
+    if (keys['d'] || keys['arrowright']) dx = 1;
+
+    if (dx !== 0 && dy !== 0) { dx *= 0.7071; dy *= 0.7071; }
+
+    rex.moving = dx !== 0 || dy !== 0;
+    if (rex.moving) {
+      rex.dir = getDir(dx, dy);
+      rex.walkPhase += dt;
+
+      let speed = REX_SPEED;
+      if (stamina <= STAMINA_SLOW_THRESH) speed = REX_SLOW_SPEED;
+      if (isOnPatio(rex.x, rex.y)) speed *= ZOOMIES_MULT; // Zoomies on patio (misters)
+
+      const nx = rex.x + dx * speed * dt;
+      const ny = rex.y + dy * speed * dt;
+
+      // Slide along walls/obstacles
+      if (canMoveTo(nx, ny)) { rex.x = nx; rex.y = ny; }
+      else if (canMoveTo(nx, rex.y)) { rex.x = nx; }
+      else if (canMoveTo(rex.x, ny)) { rex.y = ny; }
+    }
+  }
+
+  // ── Stamina ──
+  if (isOnPatio(rex.x, rex.y)) {
+    stamina = Math.min(STAMINA_MAX, stamina + STAMINA_REGEN * dt);
+  } else {
+    stamina = Math.max(0, stamina - STAMINA_DRAIN * dt);
+  }
+
+  // ── Sniff proximity ──
+  let minDist = Infinity;
+  for (const b of bones) {
+    if (!b.found) {
+      const d = Math.hypot(b.x - rex.x, b.y - rex.y);
+      if (d < minDist) minDist = d;
+    }
+  }
+  sniffProximity = minDist < SNIFF_MAX_DIST ? 1 - (minDist / SNIFF_MAX_DIST) : 0;
+  updateRadar(dt, sniffProximity);
+
+  // ── Dig ──
+  digCooldown = Math.max(0, digCooldown - dt);
+  if (keys['space'] && digCooldown <= 0 && !isChasing) {
+    keys['space'] = false;
+    digCooldown = 0.4;
+    let dugBone = false;
+    for (const b of bones) {
+      if (!b.found && Math.hypot(b.x - rex.x, b.y - rex.y) < DIG_RANGE) {
+        b.found = true;
+        b.popTimer = 0;
+        bonesFound++;
+        score += 100 * level;
+        dugBone = true;
+        spawnDirtBurst(b.x, b.y);
+        spawnBoneStars(b.x, b.y);
+        playBark();
+        playBonePopup();
+        screenShake = 0.2;
+        showMessage(`🦴 Bone found! +${100 * level} pts`, 1.5);
+
+        if (gameMode === 'timeAttack') timeLeft += TIME_BONUS;
+
+        // Check win
+        if (bonesFound >= totalBones) {
+          setTimeout(() => {
+            playLevelComplete();
+            if (level >= 5) { state = 'win'; }
+            else { state = 'levelComplete'; }
+          }, 500);
+        }
+        break;
+      }
+    }
+    if (!dugBone) {
+      spawnDirtBurst(rex.x + (rex.dir === 3 ? 15 : rex.dir === 2 ? -15 : 0),
+                     rex.y + (rex.dir === 0 ? 15 : rex.dir === 1 ? -15 : 0));
+      playDig();
+      screenShake = 0.1;
+    }
+  }
+
+  // ── Bone pop timers ──
+  for (const b of bones) {
+    if (b.found) b.popTimer = Math.min(1, (b.popTimer || 0) + dt);
+  }
+
+  // ── Squirrel ──
+  if (level >= 2 && !squirrel) {
+    squirrelTimer -= dt;
+    if (squirrelTimer <= 0) {
+      squirrel = createSquirrel();
+      playSquirrelChirp();
+      showMessage('🐿️ Squirrel spotted!', 1.5);
+    }
+  }
+  if (squirrel && squirrel.active) {
+    squirrel.x += squirrel.vx * dt;
+    squirrel.y += squirrel.vy * dt;
+    squirrel.tailPhase += dt;
+
+    // Out of bounds
+    if (squirrel.x < -50 || squirrel.x > WORLD_W + 50 ||
+        squirrel.y < -50 || squirrel.y > WORLD_H + 50) {
+      squirrel.active = false;
+      squirrel = null;
+      squirrelTimer = SQUIRREL_MIN_INT + Math.random() * (SQUIRREL_MAX_INT - SQUIRREL_MIN_INT);
+    }
+
+    // Detect Rex
+    if (squirrel && !squirrel.detected && !isChasing) {
+      const sd = Math.hypot(squirrel.x - rex.x, squirrel.y - rex.y);
+      if (sd < SQUIRREL_DETECT_R) {
+        squirrel.detected = true;
+        isChasing = true;
+        chaseTimer = SQUIRREL_CHASE_DUR;
+        showMessage('Rex got distracted! 🐿️', 2);
+        playSquirrelChirp();
+      }
+    }
+  }
+
+  // ── Screen shake decay ──
+  screenShake = Math.max(0, screenShake - dt);
+
+  // ── Message timer ──
+  if (messageTimer > 0) messageTimer -= dt;
+
+  // ── Camera ──
+  updateCamera();
+
+  // ── Particles ──
+  updateParticles(dt);
+  updateMistParticles(dt);
+
+  // ── Mist sound volume based on proximity ──
+  if (mistGain) {
+    const patioVol = isOnPatio(rex.x, rex.y) ? 0.06 : 0;
+    setMistVolume(patioVol);
+  }
+}
+
+function getDir(dx, dy) {
+  if (Math.abs(dy) > Math.abs(dx)) return dy > 0 ? 0 : 1;
+  return dx > 0 ? 3 : 2;
+}
+
+function updateCamera() {
+  const targetX = rex.x - CANVAS_W / 2;
+  const targetY = rex.y - CANVAS_H / 2;
+  cam.x += (targetX - cam.x) * 0.1;
+  cam.y += (targetY - cam.y) * 0.1;
+  cam.x = Math.max(0, Math.min(WORLD_W - CANVAS_W, cam.x));
+  cam.y = Math.max(0, Math.min(WORLD_H - CANVAS_H, cam.y));
+}
+
+function showMessage(text, dur) {
+  messageText = text;
+  messageTimer = dur;
+}
+
+// ============================================================
+//  DRAW
+// ============================================================
+function draw() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  if (state === 'menu') { drawMenu(); return; }
+
+  // Screen shake
+  ctx.save();
+  if (screenShake > 0) {
+    ctx.translate(
+      (Math.random() - 0.5) * screenShake * 20,
+      (Math.random() - 0.5) * screenShake * 20
+    );
+  }
+
+  // Background
+  ctx.drawImage(bgCanvas, -cam.x, -cam.y);
+
+  // Mist particles (below Rex)
+  drawMistParticles(cam.x, cam.y);
+
+  // Bones (unfound subtle hints)
+  for (const b of bones) {
+    if (!b.found) drawBone(b.x, b.y, cam.x, cam.y, false, 0);
+  }
+
+  // Obstacles
+  for (const ob of obstacles) drawObstacle(ob, cam.x, cam.y);
+
+  // Sniff radar
+  drawRadar(rex.x, rex.y, cam.x, cam.y);
+
+  // Squirrel
+  if (squirrel) drawSquirrel(squirrel, cam.x, cam.y);
+
+  // Rex
+  const exhausted = stamina <= 0;
+  drawRex(rex.x, rex.y, rex.dir, rex.walkPhase, cam.x, cam.y, isChasing, exhausted);
+
+  // Zoomies sparkle
+  if (isOnPatio(rex.x, rex.y) && rex.moving) {
+    if (Math.random() < 0.3) {
+      spawnParticle(rex.x + (Math.random() - 0.5) * 20, rex.y + (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, 0.3, 2, '#80dcff', 0, true);
+    }
+  }
+
+  // Found bones (drawn on top)
+  for (const b of bones) {
+    if (b.found) drawBone(b.x, b.y, cam.x, cam.y, true, b.popTimer);
+  }
+
+  // General particles
+  drawParticles(cam.x, cam.y);
+
+  ctx.restore();
+
+  // UI Overlay
+  drawUI();
+
+  // Countdown overlay
+  if (levelStartCountdown > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 72px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const num = Math.ceil(levelStartCountdown);
+    ctx.fillText(num <= 0 ? 'GO!' : `${num}`, CANVAS_W / 2, CANVAS_H / 2);
+    ctx.font = '24px sans-serif';
+    ctx.fillText(`Level ${level} — Find ${totalBones} bones!`, CANVAS_W / 2, CANVAS_H / 2 + 50);
+  }
+
+  // Level complete overlay
+  if (state === 'levelComplete') drawLevelComplete();
+  if (state === 'gameOver') drawGameOver();
+  if (state === 'win') drawWinScreen();
+}
+
+// ============================================================
+//  MENU SCREEN
+// ============================================================
+function drawMenu() {
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  skyGrad.addColorStop(0, '#4ab8f0');
+  skyGrad.addColorStop(0.5, '#80d4ff');
+  skyGrad.addColorStop(1, '#c0e8ff');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Sun
+  const sunPulse = 1 + Math.sin(menuPupAnim * 2) * 0.05;
+  ctx.fillStyle = '#ffe840';
+  ctx.beginPath();
+  ctx.arc(780, 100, 50 * sunPulse, 0, Math.PI * 2);
+  ctx.fill();
+  // Sun rays
+  ctx.strokeStyle = '#ffe840';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + menuPupAnim * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(780 + Math.cos(a) * 58, 100 + Math.sin(a) * 58);
+    ctx.lineTo(780 + Math.cos(a) * 72, 100 + Math.sin(a) * 72);
+    ctx.stroke();
+  }
+
+  // Ground
+  ctx.fillStyle = '#5a9e3a';
+  ctx.fillRect(0, CANVAS_H - 180, CANVAS_W, 180);
+  ctx.fillStyle = '#4a8c2a';
+  ctx.fillRect(0, CANVAS_H - 180, CANVAS_W, 8);
+
+  // Cacti in bg
+  for (let cx = 80; cx < CANVAS_W; cx += 200) {
+    drawMenuCactus(cx, CANVAS_H - 200);
+  }
+
+  // Title particles
+  for (const p of titleParticles) {
+    ctx.globalAlpha = Math.max(0, p.life / 5);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Title with shadow
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Title shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.font = 'bold 64px sans-serif';
+  ctx.fillText("Rex's Treat Hunt", CANVAS_W / 2 + 3, 123);
+
+  // Title
+  const titleGrad = ctx.createLinearGradient(CANVAS_W / 2 - 200, 80, CANVAS_W / 2 + 200, 160);
+  titleGrad.addColorStop(0, '#ff8c20');
+  titleGrad.addColorStop(0.5, '#ffe040');
+  titleGrad.addColorStop(1, '#ff8c20');
+  ctx.fillStyle = titleGrad;
+  ctx.font = 'bold 64px sans-serif';
+  ctx.fillText("Rex's Treat Hunt", CANVAS_W / 2, 120);
+
+  // Subtitle
+  ctx.fillStyle = '#fff';
+  ctx.font = '22px sans-serif';
+  ctx.fillText('Help Rex find all the hidden bones!', CANVAS_W / 2, 175);
+
+  // Animated Rex on menu
+  const menuRexY = CANVAS_H - 240 + Math.sin(menuPupAnim * 3) * 8;
+  drawRex(CANVAS_W / 2, menuRexY + cam.y, 0, menuPupAnim, 0, cam.y, false, false);
+
+  // Bone icon bouncing
+  const boneY = CANVAS_H - 290 + Math.sin(menuPupAnim * 4 + 1) * 6;
+  ctx.font = '36px sans-serif';
+  ctx.fillText('🦴', CANVAS_W / 2 - 120, boneY);
+  ctx.fillText('🦴', CANVAS_W / 2 + 120, boneY + 10);
+
+  // Buttons
+  const btnY1 = 280, btnY2 = 350;
+  drawMenuButton(CANVAS_W / 2, btnY1, 260, 50, '🌿  Explore Mode', 'explore');
+  drawMenuButton(CANVAS_W / 2, btnY2, 260, 50, '⏱️  Time Attack', 'timeAttack');
+
+  // Controls hint
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('WASD / Arrow Keys to move  •  SPACE to dig', CANVAS_W / 2, CANVAS_H - 30);
+  ctx.fillText('Find all bones to complete each level!', CANVAS_W / 2, CANVAS_H - 10);
+}
+
+const menuBtns = [];
+function drawMenuButton(x, y, w, h, text, action) {
+  const hovered = mouseX > x - w / 2 && mouseX < x + w / 2 && mouseY > y - h / 2 && mouseY < y + h / 2;
+  const scale = hovered ? 1.05 : 1;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.roundRect(-w / 2 + 3, -h / 2 + 3, w, h, 12);
+  ctx.fill();
+
+  // Button bg
+  const grad = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
+  if (hovered) {
+    grad.addColorStop(0, '#ff9040');
+    grad.addColorStop(1, '#e06020');
+  } else {
+    grad.addColorStop(0, '#ff7828');
+    grad.addColorStop(1, '#d05818');
+  }
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 12);
+  ctx.fill();
+
+  // Border
+  ctx.strokeStyle = '#fff8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 12);
+  ctx.stroke();
+
+  // Text
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 0, 1);
+
+  ctx.restore();
+
+  // Click detection
+  if (mouseClicked && hovered) {
+    if (action === 'explore') startGame('explore');
+    else if (action === 'timeAttack') startGame('timeAttack');
+  }
+}
+
+function drawMenuCactus(x, y) {
+  ctx.fillStyle = '#2d7a2d';
+  ctx.beginPath();
+  ctx.roundRect(x - 5, y - 24, 10, 30, 4);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(x - 14, y - 16, 10, 6, 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(x - 14, y - 22, 6, 12, 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(x + 4, y - 12, 10, 6, 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(x + 8, y - 20, 6, 14, 3);
+  ctx.fill();
+}
+
+// ============================================================
+//  UI OVERLAY (in-game)
+// ============================================================
+function drawUI() {
+  if (state !== 'playing') return;
+
+  const pad = 12;
+
+  // Semi-transparent UI bar at top
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.roundRect(pad, pad, 320, 85, 10);
+  ctx.fill();
+
+  // Bones counter
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`🦴 Bones: ${bonesFound} / ${totalBones}`, pad + 15, pad + 10);
+
+  // Score
+  ctx.fillStyle = '#ffe040';
+  ctx.font = '16px sans-serif';
+  ctx.fillText(`Score: ${score}`, pad + 15, pad + 36);
+
+  // Level
+  ctx.fillStyle = '#80ff80';
+  ctx.fillText(`Level ${level}`, pad + 150, pad + 36);
+
+  // Stamina bar
+  ctx.fillStyle = '#444';
+  ctx.fillRect(pad + 15, pad + 60, 200, 14);
+  const staminaPct = stamina / STAMINA_MAX;
+  const staminaColor = staminaPct > 0.5 ? '#40d040' : staminaPct > 0.2 ? '#e0c030' : '#e04040';
+  ctx.fillStyle = staminaColor;
+  ctx.fillRect(pad + 15, pad + 60, 200 * staminaPct, 14);
+  ctx.strokeStyle = '#fff4';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pad + 15, pad + 60, 200, 14);
+  ctx.fillStyle = '#fff';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Stamina`, pad + 115, pad + 62);
+
+  // Sniff Meter (right side)
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.roundRect(CANVAS_W - 80 - pad, pad, 80, 180, 10);
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('SNIFF', CANVAS_W - 40 - pad, pad + 15);
+
+  // Vertical signal bars
+  const barCount = 8;
+  for (let i = 0; i < barCount; i++) {
+    const barH = 10 + i * 2;
+    const bx = CANVAS_W - 65 - pad + i * 8;
+    const by = pad + 155 - barH;
+    const lit = (i / barCount) < sniffProximity;
+    if (lit) {
+      const hue = 240 - sniffProximity * 240; // blue to red
+      ctx.fillStyle = `hsl(${hue}, 100%, 55%)`;
+    } else {
+      ctx.fillStyle = '#333';
+    }
+    ctx.fillRect(bx, by, 6, barH);
+  }
+
+  // Sniff label
+  const sniffLabel = sniffProximity < 0.15 ? 'Cold...' :
+    sniffProximity < 0.4 ? 'Warm' :
+    sniffProximity < 0.7 ? 'HOT!' : '🔥 DIG!';
+  ctx.fillStyle = sniffProximity > 0.7 ? '#ff4040' : sniffProximity > 0.4 ? '#ffcc00' : '#80b0ff';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillText(sniffLabel, CANVAS_W - 40 - pad, pad + 170);
+
+  // Time attack timer
+  if (gameMode === 'timeAttack') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(CANVAS_W / 2 - 60, pad, 120, 36, 10);
+    ctx.fill();
+    ctx.fillStyle = timeLeft < 10 ? '#ff4040' : '#fff';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`⏱ ${Math.ceil(timeLeft)}s`, CANVAS_W / 2, pad + 23);
+  }
+
+  // Message
+  if (messageTimer > 0) {
+    const mAlpha = Math.min(1, messageTimer);
+    ctx.globalAlpha = mAlpha;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    ctx.roundRect(CANVAS_W / 2 - 180, CANVAS_H - 100, 360, 40, 10);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(messageText, CANVAS_W / 2, CANVAS_H - 76);
+    ctx.globalAlpha = 1;
+  }
+
+  // Chase warning
+  if (isChasing) {
+    const flash = Math.sin(Date.now() * 0.01) > 0;
+    if (flash) {
+      ctx.fillStyle = 'rgba(255,80,40,0.25)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    }
+    ctx.fillStyle = '#ff4040';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🐿️ SQUIRREL! 🐿️', CANVAS_W / 2, CANVAS_H / 2 - 120);
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(`${Math.ceil(chaseTimer)}s`, CANVAS_W / 2, CANVAS_H / 2 - 92);
+  }
+
+  // On-patio indicator
+  if (isOnPatio(rex.x, rex.y)) {
+    ctx.fillStyle = 'rgba(100,200,255,0.15)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.fillStyle = '#80dcff';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('💨 Cooling off... Stamina recharging!', CANVAS_W / 2, CANVAS_H - 30);
+  }
+
+  // Mini-map (bottom-left)
+  drawMiniMap();
+}
+
+function drawMiniMap() {
+  const mmW = 120, mmH = 85;
+  const mmX = 12, mmY = CANVAS_H - mmH - 12;
+  const scaleX = mmW / WORLD_W, scaleY = mmH / WORLD_H;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  ctx.roundRect(mmX - 2, mmY - 2, mmW + 4, mmH + 4, 6);
+  ctx.fill();
+
+  // Grass
+  ctx.fillStyle = '#3a6a1a';
+  ctx.fillRect(mmX, mmY, mmW, mmH);
+
+  // Patio
+  ctx.fillStyle = '#8a7a68';
+  ctx.fillRect(mmX + PATIO.x * scaleX, mmY + PATIO.y * scaleY, PATIO.w * scaleX, PATIO.h * scaleY);
+
+  // Unfound bones
+  for (const b of bones) {
+    if (!b.found) {
+      ctx.fillStyle = sniffProximity > 0.5 ? '#ff4040' : '#ffcc00';
+      ctx.beginPath();
+      ctx.arc(mmX + b.x * scaleX, mmY + b.y * scaleY, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Rex
+  ctx.fillStyle = '#40ff40';
+  ctx.beginPath();
+  ctx.arc(mmX + rex.x * scaleX, mmY + rex.y * scaleY, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Squirrel
+  if (squirrel && squirrel.active) {
+    ctx.fillStyle = '#ff8040';
+    ctx.beginPath();
+    ctx.arc(mmX + squirrel.x * scaleX, mmY + squirrel.y * scaleY, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Camera viewport
+  ctx.strokeStyle = '#fff8';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mmX + cam.x * scaleX, mmY + cam.y * scaleY, CANVAS_W * scaleX, CANVAS_H * scaleY);
+}
+
+// ============================================================
+//  OVERLAY SCREENS
+// ============================================================
+function drawOverlayBg() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+function drawLevelComplete() {
+  drawOverlayBg();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = '#ffe040';
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillText('Good Boy! 🐾', CANVAS_W / 2, CANVAS_H / 2 - 80);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(`Level ${level} Complete!`, CANVAS_W / 2, CANVAS_H / 2 - 30);
+  ctx.fillText(`Bones: ${bonesFound}/${totalBones}  •  Score: ${score}`, CANVAS_W / 2, CANVAS_H / 2 + 10);
+
+  ctx.fillStyle = '#80ff80';
+  ctx.font = '20px sans-serif';
+  ctx.fillText('Press ENTER or click to continue', CANVAS_W / 2, CANVAS_H / 2 + 60);
+
+  if (keys['enter'] || mouseClicked) {
+    level++;
+    state = 'playing';
+    initLevel();
+  }
+}
+
+function drawGameOver() {
+  drawOverlayBg();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = '#ff6040';
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillText("Time's Up!", CANVAS_W / 2, CANVAS_H / 2 - 80);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(`Rex found ${bonesFound} of ${totalBones} bones`, CANVAS_W / 2, CANVAS_H / 2 - 30);
+  ctx.fillText(`Final Score: ${score}`, CANVAS_W / 2, CANVAS_H / 2 + 10);
+  ctx.fillText(`Reached Level ${level}`, CANVAS_W / 2, CANVAS_H / 2 + 40);
+
+  ctx.fillStyle = '#80ff80';
+  ctx.font = '20px sans-serif';
+  ctx.fillText('Press ENTER or click for menu', CANVAS_W / 2, CANVAS_H / 2 + 90);
+
+  if (keys['enter'] || mouseClicked) {
+    state = 'menu';
+  }
+}
+
+function drawWinScreen() {
+  drawOverlayBg();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Fireworks particles
+  if (Math.random() < 0.1) {
+    const fx = 100 + Math.random() * (CANVAS_W - 200);
+    const fy = 100 + Math.random() * 200;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      spawnParticle(fx + cam.x, fy + cam.y, Math.cos(a) * 80, Math.sin(a) * 80, 1, 3,
+        ['#ff4040','#40ff40','#4080ff','#ffff40','#ff40ff'][Math.floor(Math.random()*5)], 0, true);
+    }
+  }
+  drawParticles(cam.x, cam.y);
+
+  ctx.fillStyle = '#ffe040';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.fillText('🏆 Champion! 🏆', CANVAS_W / 2, CANVAS_H / 2 - 80);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '26px sans-serif';
+  ctx.fillText('Rex found ALL the bones!', CANVAS_W / 2, CANVAS_H / 2 - 20);
+  ctx.fillText(`Final Score: ${score}`, CANVAS_W / 2, CANVAS_H / 2 + 20);
+
+  ctx.fillStyle = '#80ff80';
+  ctx.font = '20px sans-serif';
+  ctx.fillText('Press ENTER or click for menu', CANVAS_W / 2, CANVAS_H / 2 + 80);
+
+  if (keys['enter'] || mouseClicked) {
+    state = 'menu';
+  }
+}
+
+// ============================================================
+//  UTILITY
+// ============================================================
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ============================================================
+//  GAME LOOP
+// ============================================================
+let lastTime = 0;
+generateObstacles();
+renderBackground();
+
+function gameLoop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  update(dt);
+  draw();
+
+  mouseClicked = false;
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
