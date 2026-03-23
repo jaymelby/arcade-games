@@ -25,74 +25,139 @@ canvas {
     image-rendering: pixelated;
     cursor: none;
 }
-#overlay {
+#cutscene-overlay {
+    position: relative;
+    width: 960px;
+    height: 640px;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    user-select: none;
+}
+#cutscene-overlay img {
     position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+#cutscene-overlay img.active {
+    opacity: 1;
+}
+#cutscene-overlay .cutscene-prompt {
+    position: absolute;
+    bottom: 32px;
+    left: 0; right: 0;
+    text-align: center;
+    font: bold 20px 'Segoe UI', Tahoma, sans-serif;
+    color: #fff;
+    text-shadow: 0 0 8px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7);
     pointer-events: none;
-    z-index: 10;
+    animation: prompt-pulse 1.5s ease-in-out infinite;
+}
+@keyframes prompt-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
 }
 </style>
 </head>
 <body>
-<canvas id="gameCanvas"></canvas>
-<div id="overlay"></div>
+<div id="cutscene-overlay">
+    <img src="assets/scene1.png" alt="Scene 1">
+    <img src="assets/scene2.png" alt="Scene 2">
+    <img src="assets/scene3.png" alt="Scene 3">
+    <div class="cutscene-prompt">Click to Continue</div>
+</div>
+<canvas id="gameCanvas" style="display:none;"></canvas>
 
 <script>
 "use strict";
 // ============================================================================
-//  BUNNY'S JAILBREAK — Complete Phase 1 Implementation
-//  Single-file HTML5 Canvas game with ES6 Classes
+//  BUNNY'S JAILBREAK — Enhanced Edition
+//  All 10 "Next Level" features integrated:
+//    1. Day/Night Cycle with Fog-of-War Lighting
+//    2. A* Pathfinding for Rex
+//    3. Rescued Bunny Follower Caravan
+//    4. Stealth Bushes & Hiding
+//    5. Scent Trail System
+//    6. Procedural Background Music
+//    7. Distraction Throwable Sticks
+//    8. Screen-Shake & Camera Juice
+//    9. Environmental Lore Notes
+//   10. Speedrun Timer & Star Rating
 // ============================================================================
 
 // ============================================================================
-//  GAME CONSTANTS — Tweak these to adjust difficulty and feel
+//  GAME CONSTANTS — Tweak these to adjust difficulty, visuals, and feel
 // ============================================================================
 const CONFIG = {
     // --- Display ---
-    CANVAS_WIDTH: 960,              // Viewport width in pixels
-    CANVAS_HEIGHT: 640,             // Viewport height in pixels
+    CANVAS_WIDTH: 960,
+    CANVAS_HEIGHT: 640,
 
     // --- Tile Map ---
-    TILE_SIZE: 48,                  // Size of each tile in pixels
-    // Map tile codes:
+    TILE_SIZE: 48,
+    // Tile codes:
     //   0 = Grass (walkable)
     //   1 = Tree/Wall (impassable)
-    //   2 = Mud (walkable but slows movement by MUD_SPEED_FACTOR)
+    //   2 = Mud (walkable, slows movement, amplifies scent)
     //   3 = Checkpoint / Carrot Shrine
     //   4 = Hollow Log (walkable, decorative)
-    //   5 = Bush (walkable, decorative)
-    //   6 = Rock (impassable, decorative variant)
+    //   5 = Bush (walkable, can HIDE here with Q)
+    //   6 = Rock (impassable)
     //   7 = Flowers (walkable, decorative)
-    //   8 = Water (impassable)
+    //   8 = Water (impassable, erases scent trail)
+    //   9 = Stick pickup spawn point (walkable)
 
     // --- Player (Sir Fluffles) ---
-    PLAYER_SPEED: 180,              // Pixels per second base speed
-    PLAYER_DASH_SPEED: 500,         // Pixels per second while dashing
-    PLAYER_DASH_DURATION: 0.18,     // Dash duration in seconds
-    PLAYER_DASH_COOLDOWN: 1.5,      // Seconds between dashes
-    PLAYER_LIVES: 3,                // Starting lives
-    PLAYER_HIT_INVULN: 2.0,        // Invulnerability seconds after being caught
-    PLAYER_RADIUS: 14,              // Collision radius
+    PLAYER_SPEED: 180,
+    PLAYER_DASH_SPEED: 500,
+    PLAYER_DASH_DURATION: 0.18,
+    PLAYER_DASH_COOLDOWN: 1.5,
+    PLAYER_LIVES: 3,
+    PLAYER_HIT_INVULN: 2.0,
+    PLAYER_RADIUS: 14,
 
     // --- Enemy (Rex) ---
-    REX_WANDER_SPEED: 80,           // Pixels per second while wandering
-    REX_CHASE_SPEED: 155,           // Pixels per second while chasing (must be < player speed to be fair, but close)
-    REX_DETECT_RADIUS: 220,         // Line-of-sight detection radius in pixels
-    REX_LOSE_RADIUS: 350,           // Distance at which Rex gives up the chase
-    REX_BARK_INTERVAL: 1.5,         // Seconds between barks during chase
-    REX_WANDER_CHANGE: 2.5,         // Seconds between random wander direction changes
-    REX_RADIUS: 20,                 // Collision radius
-    REX_CATCH_DIST: 28,             // Distance to catch Sir Fluffles
+    REX_WANDER_SPEED: 80,
+    REX_CHASE_SPEED: 155,
+    REX_DETECT_RADIUS: 220,         // Base detection radius (increases at night)
+    REX_DETECT_RADIUS_NIGHT: 280,   // Night-time detection radius (better hearing)
+    REX_LOSE_RADIUS: 350,
+    REX_BARK_INTERVAL: 1.5,
+    REX_WANDER_CHANGE: 2.5,
+    REX_RADIUS: 20,
+    REX_CATCH_DIST: 28,
+    REX_FETCH_DURATION: 5.0,        // How long Rex chases a thrown stick
+    REX_SNIFF_BUSH_TIME: 3.0,       // How long Rex sniffs a bush before leaving
+    REX_ASTAR_BUDGET: 200,          // Max nodes A* explores per frame
 
-    // --- Rescue ---
-    RESCUE_TIME: 2.0,               // Seconds to hold E to rescue a bunny
-    RESCUE_RANGE: 50,               // Max distance to interact with a stuck bunny
+    // --- Rescue / Caravan ---
+    RESCUE_TIME: 2.0,
+    RESCUE_RANGE: 50,
+    FOLLOWER_SPACING: 32,           // Pixels between each follower in the caravan
+    FOLLOWER_TRAIL_SIZE: 60,        // How many past positions to store for the trail
+
+    // --- Stealth ---
+    HIDE_ENTER_TIME: 0.3,           // Seconds to fully hide in a bush
+    HIDE_EXIT_TIME: 0.2,
+
+    // --- Scent ---
+    SCENT_DROP_INTERVAL: 0.15,      // Seconds between scent drops
+    SCENT_LIFETIME: 12.0,           // Seconds before scent fades completely
+    SCENT_MUD_MULTIPLIER: 2.0,      // Scent lasts 2x longer on mud
+    SCENT_MAX_POINTS: 200,
+
+    // --- Sticks ---
+    STICK_COUNT: 3,                 // Sticks on the map at once
+    STICK_RESPAWN_TIME: 45.0,       // Seconds to respawn a collected stick
+    STICK_THROW_SPEED: 350,         // Pixels/sec
+    STICK_THROW_RANGE: 250,         // Max throw distance
+    STICK_AIM_SPEED: 3.0,           // Radians/sec for aim rotation
 
     // --- Mud ---
-    MUD_SPEED_FACTOR: 0.45,         // Speed multiplier on mud tiles
+    MUD_SPEED_FACTOR: 0.45,
 
     // --- Particles ---
     PARTICLE_GRAVITY: 120,
@@ -100,15 +165,35 @@ const CONFIG = {
     HEART_BURST_COUNT: 18,
 
     // --- Minimap ---
-    MINIMAP_SIZE: 150,              // Minimap square size in pixels
-    MINIMAP_MARGIN: 12,             // Margin from top-right corner
+    MINIMAP_SIZE: 150,
+    MINIMAP_MARGIN: 12,
+
+    // --- Day/Night ---
+    DAY_CYCLE_DURATION: 120,        // Full day/night cycle in seconds
+    PLAYER_LIGHT_RADIUS_DAY: 800,   // Effectively infinite during day
+    PLAYER_LIGHT_RADIUS_NIGHT: 160, // Tight radius at darkest night
+    CHECKPOINT_LIGHT_RADIUS: 100,   // Glow radius for activated checkpoints
+    BUNNY_SPARKLE_RADIUS: 40,       // SOS glow for stuck bunnies at night
+
+    // --- Screen Shake ---
+    SHAKE_BARK_INTENSITY: 4,
+    SHAKE_BARK_DURATION: 0.2,
+    SHAKE_CAUGHT_INTENSITY: 12,
+    SHAKE_CAUGHT_DURATION: 0.5,
+    SHAKE_DASH_INTENSITY: 3,
+    SHAKE_DASH_DURATION: 0.1,
+    SHAKE_RESCUE_INTENSITY: 2,
+    SHAKE_RESCUE_DURATION: 0.15,
+
+    // --- Speedrun ---
+    STAR_3_TIME: 180,               // Under 3 minutes = 3 stars
+    STAR_2_TIME: 300,               // Under 5 minutes = 2 stars
 };
 
 // ============================================================================
-//  TILE MAP — The game world
-//  Legend:  0=Grass  1=Tree  2=Mud  3=Checkpoint  4=Log  5=Bush
-//           6=Rock   7=Flowers  8=Water
-//  Map is 40 cols × 40 rows = 1920×1920 world (3x canvas in each dimension)
+//  TILE MAP — 40×40 = 1920×1920 world
+//  Legend: 0=Grass 1=Tree 2=Mud 3=Checkpoint 4=Log 5=Bush
+//          6=Rock  7=Flowers 8=Water 9=Stick
 // ============================================================================
 const MAP_COLS = 40;
 const MAP_ROWS = 40;
@@ -116,85 +201,99 @@ const MAP_ROWS = 40;
 // prettier-ignore
 const TILE_MAP = [
 //  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // Row 0  — top border wall
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // Row 0
     1, 0, 0, 0, 0, 5, 0, 0, 0, 0, 1, 0, 0, 7, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 1, // Row 1
-    1, 0, 3, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 7, 0, 0, 1, // Row 2  — starting checkpoint (3,2)
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 3
+    1, 0, 3, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 7, 0, 0, 1, // Row 2  — spawn checkpoint
+    1, 0, 0, 0, 0, 0, 0, 9, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 3  — stick at (7,3)
     1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, // Row 4
     1, 0, 0, 0, 1, 1, 0, 0, 5, 0, 0, 0, 0, 0, 1, 6, 1, 0, 0, 7, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 6, 0, 0, 0, 1, // Row 5
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 6
-    1, 0, 7, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 1, // Row 7  — mud patch center-ish
+    1, 0, 7, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 1, // Row 7
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 8
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 5, 0, 0, 0, 1, // Row 9
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 10 — checkpoint at (19,10)
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 10 — checkpoint (19,10)
     1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, // Row 11
     1, 0, 0, 1, 6, 1, 0, 0, 7, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 7, 0, 0, 0, 0, 1, 6, 1, 0, 0, 0, 0, 1, // Row 12
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 13 — water strip
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 13 — water
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 14
     1, 0, 0, 0, 5, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 15
     1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, // Row 16
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 7, 0, 1, // Row 17
-    1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 18 — checkpoint at (2,18), mud patches
+    1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 18 — checkpoint (2,18)
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 1, // Row 19
-    1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, // Row 20 — wall corridors
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, // Row 21
-    1, 0, 0, 0, 5, 0, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 1, 0, 0, 5, 0, 0, 0, 0, 0, 1, // Row 22 — checkpoint at (19,22)
+    1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, // Row 20
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 9, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, // Row 21 — stick at (19,21)
+    1, 0, 0, 0, 5, 0, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 1, 0, 0, 5, 0, 0, 0, 0, 0, 1, // Row 22 — checkpoint (19,22)
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 23
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 1, // Row 24
     1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6, 6, 1, 0, 0, 0, 1, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, // Row 25
     1, 0, 0, 1, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 1, 1, 0, 0, 0, 0, 1, // Row 26
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 27 — more mud
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 27
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 1, // Row 28
     1, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 1, // Row 29
     1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 30
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, // Row 31 — checkpoint at (34,31)
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, // Row 31 — checkpoint (34,31)
     1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, // Row 32
     1, 0, 0, 1, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 6, 1, 0, 0, 0, 1, // Row 33
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 1, // Row 34
-    1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 0, 1, 1, 0, 0, 0, 3, 0, 0, 0, 1, 1, 0, 0, 5, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 1, // Row 35 — checkpoint at (19,35)
+    1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 0, 1, 1, 0, 0, 0, 3, 0, 0, 0, 1, 1, 0, 0, 5, 0, 0, 9, 0, 4, 0, 0, 0, 0, 0, 0, 1, // Row 35 — checkpoint (19,35), stick at (30,35)
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 36
     1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 1, // Row 37
     1, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // Row 38
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // Row 39 — bottom border wall
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // Row 39
 ];
 
 const WORLD_W = MAP_COLS * CONFIG.TILE_SIZE;
 const WORLD_H = MAP_ROWS * CONFIG.TILE_SIZE;
 
 // ============================================================================
-//  STUCK BUNNY POSITIONS — (tileCol, tileRow) on walkable tiles
-//  10 bunnies spread across the map, some in tricky spots near mud/walls
+//  STUCK BUNNY POSITIONS — 10 bunnies across the map
 // ============================================================================
 const STUCK_BUNNY_POSITIONS = [
-    { col: 8,  row: 5  },   // Bunny 1  — near starting area bushes
-    { col: 16, row: 3  },   // Bunny 2  — top corridor
-    { col: 22, row: 7  },   // Bunny 3  — stuck in mud patch!
-    { col: 35, row: 2  },   // Bunny 4  — far top-right
-    { col: 5,  row: 15 },   // Bunny 5  — left side near wall
-    { col: 30, row: 12 },   // Bunny 6  — right mid area
-    { col: 12, row: 22 },   // Bunny 7  — center-left corridor
-    { col: 37, row: 22 },   // Bunny 8  — far right corridor
-    { col: 6,  row: 35 },   // Bunny 9  — bottom-left
-    { col: 36, row: 36 },   // Bunny 10 — bottom-right
+    { col: 8,  row: 5  },   // 1 — near start
+    { col: 16, row: 3  },   // 2 — top corridor
+    { col: 22, row: 7  },   // 3 — mud patch
+    { col: 35, row: 2  },   // 4 — far top-right
+    { col: 5,  row: 15 },   // 5 — left near wall
+    { col: 30, row: 12 },   // 6 — right mid
+    { col: 12, row: 22 },   // 7 — center-left corridor
+    { col: 37, row: 22 },   // 8 — far right corridor
+    { col: 6,  row: 35 },   // 9 — bottom-left
+    { col: 36, row: 36 },   // 10 — bottom-right
 ];
 
-// Rex starting position (tile coords)
-const REX_START = { col: 20, row: 20 };
+// ============================================================================
+//  LORE NOTE POSITIONS & TEXT (#9 Environmental Storytelling)
+// ============================================================================
+const LORE_NOTES = [
+    { col: 6,  row: 1,  title: "Mayor's Journal - Entry 1",
+      text: "Rex broke through the garden fence again today.\nThe citizens scattered into the Whispering Woods.\nI must find them before nightfall..." },
+    { col: 25, row: 5,  title: "Mayor's Journal - Entry 2",
+      text: "The mud patches near the old mill are treacherous.\nI can hear Rex barking in the distance...\nHe thinks this is all just a game of chase." },
+    { col: 15, row: 14, title: "A Crumpled Note",
+      text: "To whoever finds this: the lake blocks Rex's path\nbut he can hear you from even further at night!\nStay near the Carrot Shrines. They feel... safe.\n— A frightened citizen" },
+    { col: 33, row: 23, title: "Mayor's Journal - Entry 3",
+      text: "I've discovered Rex can't resist a good stick.\nIf I can find one, maybe I can distract him\nlong enough to reach the trapped bunnies nearby." },
+    { col: 10, row: 35, title: "Mayor's Journal - Entry 4",
+      text: "The bushes here are thick enough to hide in.\nRex sniffed around but eventually moved on.\nI must remember: patience is survival." },
+    { col: 28, row: 32, title: "Ancient Carrot Inscription",
+      text: "When the last citizen is safe, the meadow will sing.\nThe shrines were placed by the First Mayor,\nwho also dealt with an overenthusiastic puppy." },
+];
 
-// Player starting position (tile coords) — near the first checkpoint
+const REX_START = { col: 20, row: 20 };
 const PLAYER_START = { col: 2, row: 3 };
 
 // ============================================================================
 //  UTILITY FUNCTIONS
 // ============================================================================
 function tileAt(col, row) {
-    if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) return 1; // out-of-bounds = wall
+    if (col < 0 || col >= MAP_COLS || row < 0 || row >= MAP_ROWS) return 1;
     return TILE_MAP[row * MAP_COLS + col];
 }
 
 function isSolid(col, row) {
     const t = tileAt(col, row);
-    return t === 1 || t === 6 || t === 8; // tree, rock, water are impassable
+    return t === 1 || t === 6 || t === 8;
 }
 
 function tileCenter(col, row) {
@@ -207,15 +306,12 @@ function dist(x1, y1, x2, y2) {
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
-
 function clamp(v, min, max) { return v < min ? min : v > max ? max : v; }
-
 function rng(min, max) { return Math.random() * (max - min) + min; }
-
 function rngInt(min, max) { return Math.floor(rng(min, max + 1)); }
 
 // ============================================================================
-//  LINE OF SIGHT — Bresenham-style tile walk to check wall occlusion
+//  LINE OF SIGHT — Bresenham tile walk
 // ============================================================================
 function hasLineOfSight(x1, y1, x2, y2) {
     const ts = CONFIG.TILE_SIZE;
@@ -235,6 +331,152 @@ function hasLineOfSight(x1, y1, x2, y2) {
 }
 
 // ============================================================================
+//  A* PATHFINDING (#2) — Grid-based with budget cap
+// ============================================================================
+function astarPath(startX, startY, goalX, goalY) {
+    const ts = CONFIG.TILE_SIZE;
+    const sc = Math.floor(startX / ts), sr = Math.floor(startY / ts);
+    const gc = Math.floor(goalX / ts), gr = Math.floor(goalY / ts);
+    if (sc === gc && sr === gr) return null; // Already there
+
+    const key = (c, r) => r * MAP_COLS + c;
+    const heuristic = (c, r) => Math.abs(c - gc) + Math.abs(r - gr);
+
+    const open = []; // Min-heap by f cost (simple array, adequate for budget)
+    const gScore = new Map();
+    const cameFrom = new Map();
+    const closed = new Set();
+
+    const startKey = key(sc, sr);
+    gScore.set(startKey, 0);
+    open.push({ c: sc, r: sr, f: heuristic(sc, sr) });
+
+    const dirs = [
+        { dc: 1, dr: 0, cost: 1 }, { dc: -1, dr: 0, cost: 1 },
+        { dc: 0, dr: 1, cost: 1 }, { dc: 0, dr: -1, cost: 1 },
+        { dc: 1, dr: 1, cost: 1.41 }, { dc: 1, dr: -1, cost: 1.41 },
+        { dc: -1, dr: 1, cost: 1.41 }, { dc: -1, dr: -1, cost: 1.41 },
+    ];
+
+    let iterations = 0;
+    while (open.length > 0 && iterations < CONFIG.REX_ASTAR_BUDGET) {
+        iterations++;
+        // Find lowest f in open (simple scan — fine for small budget)
+        let bestIdx = 0;
+        for (let i = 1; i < open.length; i++) {
+            if (open[i].f < open[bestIdx].f) bestIdx = i;
+        }
+        const current = open.splice(bestIdx, 1)[0];
+        const ck = key(current.c, current.r);
+
+        if (current.c === gc && current.r === gr) {
+            // Reconstruct path, return first step
+            let step = ck;
+            let prev = cameFrom.get(step);
+            while (prev !== undefined && prev !== startKey) {
+                step = prev;
+                prev = cameFrom.get(step);
+            }
+            const stepC = step % MAP_COLS;
+            const stepR = Math.floor(step / MAP_COLS);
+            return tileCenter(stepC, stepR);
+        }
+
+        closed.add(ck);
+
+        for (const dir of dirs) {
+            const nc = current.c + dir.dc;
+            const nr = current.r + dir.dr;
+            if (isSolid(nc, nr)) continue;
+            // Diagonal: check both cardinals
+            if (dir.dc !== 0 && dir.dr !== 0) {
+                if (isSolid(current.c + dir.dc, current.r) || isSolid(current.c, current.r + dir.dr)) continue;
+            }
+            const nk = key(nc, nr);
+            if (closed.has(nk)) continue;
+            const tentG = (gScore.get(ck) || 0) + dir.cost;
+            if (tentG < (gScore.get(nk) ?? Infinity)) {
+                gScore.set(nk, tentG);
+                cameFrom.set(nk, ck);
+                const f = tentG + heuristic(nc, nr);
+                // Check if already in open
+                const existing = open.find(n => n.c === nc && n.r === nr);
+                if (existing) { existing.f = f; }
+                else { open.push({ c: nc, r: nr, f }); }
+            }
+        }
+    }
+    return null; // No path found within budget
+}
+
+// ============================================================================
+//  SCENT TRAIL SYSTEM (#5)
+// ============================================================================
+class ScentTrail {
+    constructor() {
+        this.points = []; // { x, y, life, maxLife }
+        this.dropTimer = 0;
+    }
+
+    update(dt, playerX, playerY, isHidden) {
+        // Drop scent
+        if (!isHidden) {
+            this.dropTimer -= dt;
+            if (this.dropTimer <= 0) {
+                this.dropTimer = CONFIG.SCENT_DROP_INTERVAL;
+                const col = Math.floor(playerX / CONFIG.TILE_SIZE);
+                const row = Math.floor(playerY / CONFIG.TILE_SIZE);
+                const tile = tileAt(col, row);
+                // Water erases — don't drop on water-adjacent tiles either
+                if (tile === 8) return;
+                const lifetime = CONFIG.SCENT_LIFETIME * (tile === 2 ? CONFIG.SCENT_MUD_MULTIPLIER : 1);
+                this.points.push({ x: playerX, y: playerY, life: lifetime, maxLife: lifetime });
+                if (this.points.length > CONFIG.SCENT_MAX_POINTS) {
+                    this.points.shift();
+                }
+            }
+        }
+
+        // Decay scent
+        for (let i = this.points.length - 1; i >= 0; i--) {
+            this.points[i].life -= dt;
+            if (this.points[i].life <= 0) this.points.splice(i, 1);
+        }
+    }
+
+    // Erase scent near water tiles (player runs through water-adjacent area)
+    eraseNear(x, y, radius) {
+        for (let i = this.points.length - 1; i >= 0; i--) {
+            if (dist(this.points[i].x, this.points[i].y, x, y) < radius) {
+                this.points.splice(i, 1);
+            }
+        }
+    }
+
+    // Get the freshest scent point (highest remaining life) — for Rex to follow
+    getFreshestPoint() {
+        if (this.points.length === 0) return null;
+        let best = this.points[0];
+        for (const p of this.points) {
+            if (p.life > best.life) best = p;
+        }
+        return best;
+    }
+
+    // Get nearest scent point to a position
+    getNearestPoint(x, y) {
+        let nearest = null, nearestDist = Infinity;
+        for (const p of this.points) {
+            const d = dist(x, y, p.x, p.y);
+            if (d < nearestDist) { nearestDist = d; nearest = p; }
+        }
+        return nearest;
+    }
+
+    clear() { this.points = []; }
+}
+
+// ============================================================================
 //  AUDIO SYSTEM — Web Audio API synthesized sounds
 // ============================================================================
 class AudioSystem {
@@ -248,9 +490,7 @@ class AudioSystem {
         try {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
             this.initialized = true;
-        } catch (e) {
-            console.warn("Web Audio not available");
-        }
+        } catch (e) { console.warn("Web Audio not available"); }
     }
 
     _tone(freq, duration, type = "square", volume = 0.15, rampDown = true) {
@@ -261,74 +501,183 @@ class AudioSystem {
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         gain.gain.setValueAtTime(volume, this.ctx.currentTime);
         if (rampDown) gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
+        osc.connect(gain); gain.connect(this.ctx.destination);
+        osc.start(); osc.stop(this.ctx.currentTime + duration);
     }
 
     playDash() { this._tone(300, 0.1, "sawtooth", 0.08); }
-
     playBark() {
-        // Low rumble bark — two quick tones
         this._tone(100, 0.15, "sawtooth", 0.2);
         setTimeout(() => this._tone(80, 0.2, "sawtooth", 0.15), 80);
     }
-
     playRescue() {
-        // Happy ascending chime
-        [523, 659, 784, 1047].forEach((f, i) => {
-            setTimeout(() => this._tone(f, 0.2, "sine", 0.12), i * 80);
-        });
+        [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this._tone(f, 0.2, "sine", 0.12), i * 80));
     }
-
     playCheckpoint() {
-        // Two-note chime
         this._tone(660, 0.3, "sine", 0.1);
         setTimeout(() => this._tone(880, 0.4, "sine", 0.1), 150);
     }
-
     playCaught() {
-        // Sad descending tone
-        [400, 300, 200, 140].forEach((f, i) => {
-            setTimeout(() => this._tone(f, 0.25, "triangle", 0.15), i * 100);
-        });
+        [400, 300, 200, 140].forEach((f, i) => setTimeout(() => this._tone(f, 0.25, "triangle", 0.15), i * 100));
     }
-
     playGameOver() {
-        [300, 250, 200, 150, 100].forEach((f, i) => {
-            setTimeout(() => this._tone(f, 0.4, "sawtooth", 0.12), i * 150);
-        });
+        [300, 250, 200, 150, 100].forEach((f, i) => setTimeout(() => this._tone(f, 0.4, "sawtooth", 0.12), i * 150));
     }
-
     playWin() {
-        [523, 587, 659, 784, 880, 1047].forEach((f, i) => {
-            setTimeout(() => this._tone(f, 0.3, "sine", 0.12), i * 120);
-        });
+        [523, 587, 659, 784, 880, 1047].forEach((f, i) => setTimeout(() => this._tone(f, 0.3, "sine", 0.12), i * 120));
+    }
+    playPickup() { this._tone(880, 0.1, "sine", 0.1); this._tone(1100, 0.1, "sine", 0.08); }
+    playThrow() { this._tone(200, 0.15, "sawtooth", 0.1); }
+    playSniff() { this._tone(60, 0.3, "sawtooth", 0.08); }
+    playNote() {
+        // Page turning sound
+        this._tone(800, 0.05, "sine", 0.06);
+        setTimeout(() => this._tone(600, 0.08, "sine", 0.05), 60);
+    }
+    playScatter() {
+        [500, 350, 250].forEach((f, i) => setTimeout(() => this._tone(f, 0.15, "sawtooth", 0.1), i * 60));
+    }
+    playDeposit() {
+        [440, 550, 660, 880].forEach((f, i) => setTimeout(() => this._tone(f, 0.15, "sine", 0.1), i * 70));
     }
 }
 
 // ============================================================================
-//  PARTICLE CLASS
+//  PROCEDURAL MUSIC SYSTEM (#6)
+//  Layered oscillator-based generative music that reacts to game state
+// ============================================================================
+class MusicSystem {
+    constructor(audioSys) {
+        this.audioSys = audioSys;
+        this.playing = false;
+        this.state = "calm";    // "calm", "chase", "night"
+        this.targetState = "calm";
+        this.beatTimer = 0;
+        this.beatInterval = 0.5; // seconds per beat
+        this.beatIndex = 0;
+        this.rescuedVoices = 0;
+
+        // Chord progressions
+        this.calmChords = [
+            [262, 330, 392],  // C major
+            [220, 277, 330],  // A minor
+            [349, 440, 523],  // F major
+            [392, 494, 587],  // G major
+        ];
+        this.chaseChords = [
+            [220, 277, 330],  // A minor
+            [196, 247, 294],  // G minor
+            [233, 294, 349],  // Bb major
+            [262, 311, 392],  // C minor
+        ];
+        this.chordIdx = 0;
+        this.masterVolume = 0.03;
+    }
+
+    start() { this.playing = true; }
+    stop() { this.playing = false; }
+
+    setState(s) { this.targetState = s; }
+    addVoice() { this.rescuedVoices = Math.min(this.rescuedVoices + 1, 10); }
+
+    update(dt, nightAmount) {
+        if (!this.playing || !this.audioSys.ctx) return;
+        this.beatTimer -= dt;
+        if (this.beatTimer <= 0) {
+            // Transition state
+            this.state = this.targetState;
+
+            this.beatInterval = this.state === "chase" ? 0.25 : 0.5;
+            this.beatTimer = this.beatInterval;
+            this.beatIndex++;
+
+            const ctx = this.audioSys.ctx;
+            const now = ctx.currentTime;
+            const chords = this.state === "chase" ? this.chaseChords : this.calmChords;
+
+            // Progress chord every 4 beats
+            if (this.beatIndex % 4 === 0) {
+                this.chordIdx = (this.chordIdx + 1) % chords.length;
+            }
+            const chord = chords[this.chordIdx];
+            const vol = this.masterVolume * (this.state === "chase" ? 1.5 : 1.0);
+
+            // Bass note (every beat)
+            this._playNote(ctx, chord[0] / 2, this.beatInterval * 0.8, "triangle", vol * 1.2, now);
+
+            // Chord pad (every 2 beats)
+            if (this.beatIndex % 2 === 0) {
+                for (const f of chord) {
+                    this._playNote(ctx, f, this.beatInterval * 1.8, "sine", vol * 0.4, now);
+                }
+            }
+
+            // Melody arpeggiation (every beat, higher octave)
+            const melodyIdx = this.beatIndex % chord.length;
+            this._playNote(ctx, chord[melodyIdx] * 2, this.beatInterval * 0.5, "sine", vol * 0.5, now);
+
+            // Rescued bunny voices — additional harmonic layers
+            if (this.rescuedVoices > 0 && this.beatIndex % 3 === 0) {
+                const voiceFreq = chord[this.beatIndex % chord.length] * (this.rescuedVoices > 5 ? 4 : 3);
+                this._playNote(ctx, voiceFreq, this.beatInterval * 0.6, "sine", vol * 0.2 * Math.min(this.rescuedVoices / 10, 1), now);
+            }
+
+            // Night modifier — slightly detune and lower
+            if (nightAmount > 0.4) {
+                const nightFreq = chord[0] * 0.5;
+                this._playNote(ctx, nightFreq, this.beatInterval * 1.5, "sine", vol * 0.3 * nightAmount, now);
+            }
+
+            // Chase percussion — rapid tick
+            if (this.state === "chase" && this.beatIndex % 2 === 0) {
+                this._playNoise(ctx, 0.05, vol * 0.8, now);
+            }
+        }
+    }
+
+    _playNote(ctx, freq, dur, type, vol, when) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, when);
+        gain.gain.setValueAtTime(vol, when);
+        gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(when); osc.stop(when + dur);
+    }
+
+    _playNoise(ctx, dur, vol, when) {
+        // Short burst of noise for percussion
+        const bufSize = ctx.sampleRate * dur;
+        const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
+        const src = ctx.createBufferSource();
+        const gain = ctx.createGain();
+        src.buffer = buf;
+        gain.gain.setValueAtTime(vol, when);
+        gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+        src.connect(gain); gain.connect(ctx.destination);
+        src.start(when); src.stop(when + dur);
+    }
+}
+
+// ============================================================================
+//  PARTICLE CLASS & SYSTEM
 // ============================================================================
 class Particle {
     constructor(x, y, vx, vy, life, color, size, gravity = CONFIG.PARTICLE_GRAVITY) {
-        this.x = x; this.y = y;
-        this.vx = vx; this.vy = vy;
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy;
         this.life = life; this.maxLife = life;
         this.color = color; this.size = size;
-        this.gravity = gravity;
-        this.dead = false;
+        this.gravity = gravity; this.dead = false;
     }
-
     update(dt) {
         this.vy += this.gravity * dt;
-        this.x += this.vx * dt;
-        this.y += this.vy * dt;
+        this.x += this.vx * dt; this.y += this.vy * dt;
         this.life -= dt;
         if (this.life <= 0) this.dead = true;
     }
-
     draw(ctx, cam) {
         const alpha = clamp(this.life / this.maxLife, 0, 1);
         ctx.globalAlpha = alpha;
@@ -339,61 +688,44 @@ class Particle {
     }
 }
 
-// ============================================================================
-//  PARTICLE SYSTEM — Manages all particles, provides burst helpers
-// ============================================================================
 class ParticleSystem {
-    constructor() {
-        this.particles = [];
-    }
-
+    constructor() { this.particles = []; }
     add(p) { this.particles.push(p); }
 
-    // Dust puff for dashing
     emitDash(x, y) {
         for (let i = 0; i < CONFIG.DASH_PARTICLES_PER_FRAME; i++) {
-            this.add(new Particle(
-                x + rng(-6, 6), y + rng(-6, 6),
-                rng(-40, 40), rng(-60, -10),
-                rng(0.2, 0.5),
-                "#c8b88a",
-                rng(3, 7),
-                50
-            ));
+            this.add(new Particle(x + rng(-6, 6), y + rng(-6, 6), rng(-40, 40), rng(-60, -10), rng(0.2, 0.5), "#c8b88a", rng(3, 7), 50));
         }
     }
-
-    // Heart burst for rescuing
     emitHearts(x, y) {
         for (let i = 0; i < CONFIG.HEART_BURST_COUNT; i++) {
             const angle = (Math.PI * 2 / CONFIG.HEART_BURST_COUNT) * i + rng(-0.3, 0.3);
             const speed = rng(60, 160);
-            this.add(new Particle(
-                x, y,
-                Math.cos(angle) * speed,
-                Math.sin(angle) * speed - 40,
-                rng(0.5, 1.2),
-                i % 2 === 0 ? "#ff6b9d" : "#ff3366",
-                rng(5, 10),
-                80
-            ));
+            this.add(new Particle(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed - 40, rng(0.5, 1.2), i % 2 === 0 ? "#ff6b9d" : "#ff3366", rng(5, 10), 80));
         }
     }
-
-    // "Caught!" burst — red puff
     emitCaught(x, y) {
         for (let i = 0; i < 12; i++) {
-            const angle = rng(0, Math.PI * 2);
-            const speed = rng(40, 120);
-            this.add(new Particle(
-                x, y,
-                Math.cos(angle) * speed,
-                Math.sin(angle) * speed,
-                rng(0.4, 0.8),
-                "#ff4444",
-                rng(4, 9),
-                30
-            ));
+            const angle = rng(0, Math.PI * 2), speed = rng(40, 120);
+            this.add(new Particle(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed, rng(0.4, 0.8), "#ff4444", rng(4, 9), 30));
+        }
+    }
+    emitScatter(x, y) {
+        // Bunny scattering poof
+        for (let i = 0; i < 8; i++) {
+            const angle = rng(0, Math.PI * 2), speed = rng(30, 80);
+            this.add(new Particle(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed, rng(0.3, 0.6), "#ffaa44", rng(3, 6), 60));
+        }
+    }
+    emitDeposit(x, y) {
+        for (let i = 0; i < 10; i++) {
+            const angle = rng(0, Math.PI * 2), speed = rng(30, 100);
+            this.add(new Particle(x, y, Math.cos(angle) * speed, Math.sin(angle) * speed - 30, rng(0.3, 0.8), "#ffcc00", rng(4, 8), 60));
+        }
+    }
+    emitStickLand(x, y) {
+        for (let i = 0; i < 6; i++) {
+            this.add(new Particle(x + rng(-8, 8), y, rng(-20, 20), rng(-50, -20), rng(0.2, 0.4), "#8B6914", rng(2, 5), 80));
         }
     }
 
@@ -403,22 +735,43 @@ class ParticleSystem {
             if (this.particles[i].dead) this.particles.splice(i, 1);
         }
     }
-
     draw(ctx, cam) {
         for (const p of this.particles) p.draw(ctx, cam);
     }
 }
 
 // ============================================================================
-//  CAMERA — Follows the player, clamps to world bounds
+//  CAMERA (#8: Screen Shake + Juice)
 // ============================================================================
 class Camera {
     constructor(viewW, viewH) {
-        this.x = 0;
-        this.y = 0;
-        this.viewW = viewW;
-        this.viewH = viewH;
-        this.smoothing = 6; // Higher = snappier follow
+        this.x = 0; this.y = 0;
+        this.viewW = viewW; this.viewH = viewH;
+        this.smoothing = 6;
+
+        // Screen shake
+        this.shakeIntensity = 0;
+        this.shakeTimer = 0;
+        this.shakeOffsetX = 0;
+        this.shakeOffsetY = 0;
+
+        // Zoom juice
+        this.zoomTarget = 1;
+        this.zoom = 1;
+    }
+
+    shake(intensity, duration) {
+        // Take the stronger shake if one is already active
+        if (intensity > this.shakeIntensity) {
+            this.shakeIntensity = intensity;
+            this.shakeTimer = duration;
+        }
+    }
+
+    zoomPulse(target, duration) {
+        this.zoomTarget = target;
+        // Will lerp back to 1
+        setTimeout(() => { this.zoomTarget = 1; }, duration * 1000);
     }
 
     follow(targetX, targetY, dt) {
@@ -426,70 +779,68 @@ class Camera {
         const goalY = targetY - this.viewH / 2;
         this.x = lerp(this.x, goalX, this.smoothing * dt);
         this.y = lerp(this.y, goalY, this.smoothing * dt);
-        // Clamp to world edges
         this.x = clamp(this.x, 0, WORLD_W - this.viewW);
         this.y = clamp(this.y, 0, WORLD_H - this.viewH);
+
+        // Update shake
+        if (this.shakeTimer > 0) {
+            this.shakeTimer -= dt;
+            this.shakeOffsetX = (Math.random() - 0.5) * 2 * this.shakeIntensity;
+            this.shakeOffsetY = (Math.random() - 0.5) * 2 * this.shakeIntensity;
+            if (this.shakeTimer <= 0) {
+                this.shakeIntensity = 0;
+                this.shakeOffsetX = 0;
+                this.shakeOffsetY = 0;
+            }
+        }
+
+        // Zoom lerp
+        this.zoom = lerp(this.zoom, this.zoomTarget, 4 * dt);
     }
+
+    // Effective coordinates including shake offset
+    get ex() { return this.x - this.shakeOffsetX; }
+    get ey() { return this.y - this.shakeOffsetY; }
 }
 
 // ============================================================================
-//  TEXT POP-UP — Floating text that drifts upward and fades out
+//  TEXT POP-UP — Floating text that drifts upward and fades
 // ============================================================================
 class TextPopup {
     constructor(x, y, text, color = "#fff", size = 20, life = 1.0) {
-        this.x = x; this.y = y;
-        this.text = text;
-        this.color = color;
-        this.size = size;
-        this.life = life;
-        this.maxLife = life;
-        this.dead = false;
+        this.x = x; this.y = y; this.text = text;
+        this.color = color; this.size = size;
+        this.life = life; this.maxLife = life; this.dead = false;
     }
-
-    update(dt) {
-        this.y -= 40 * dt;
-        this.life -= dt;
-        if (this.life <= 0) this.dead = true;
-    }
-
+    update(dt) { this.y -= 40 * dt; this.life -= dt; if (this.life <= 0) this.dead = true; }
     draw(ctx, cam) {
         const alpha = clamp(this.life / this.maxLife, 0, 1);
         ctx.globalAlpha = alpha;
         ctx.font = `bold ${this.size}px Arial`;
         ctx.fillStyle = this.color;
         ctx.textAlign = "center";
-        ctx.fillText(this.text, this.x - cam.x, this.y - cam.y);
+        ctx.fillText(this.text, this.x - cam.ex, this.y - cam.ey);
         ctx.globalAlpha = 1;
     }
 }
 
 // ============================================================================
-//  COLLISION HELPER — AABB-style for circle vs tile grid
-//  Returns adjusted (x,y) after resolving wall penetration
+//  COLLISION — Circle vs tile grid
 // ============================================================================
 function resolveWallCollision(x, y, radius) {
     const ts = CONFIG.TILE_SIZE;
-    // Check surrounding tiles
-    const minC = Math.floor((x - radius) / ts);
-    const maxC = Math.floor((x + radius) / ts);
-    const minR = Math.floor((y - radius) / ts);
-    const maxR = Math.floor((y + radius) / ts);
-
+    const minC = Math.floor((x - radius) / ts), maxC = Math.floor((x + radius) / ts);
+    const minR = Math.floor((y - radius) / ts), maxR = Math.floor((y + radius) / ts);
     for (let r = minR; r <= maxR; r++) {
         for (let c = minC; c <= maxC; c++) {
             if (!isSolid(c, r)) continue;
-            // Closest point on the tile AABB to the circle center
-            const tileLeft = c * ts, tileTop = r * ts;
-            const tileRight = tileLeft + ts, tileBottom = tileTop + ts;
-            const closestX = clamp(x, tileLeft, tileRight);
-            const closestY = clamp(y, tileTop, tileBottom);
-            const dx = x - closestX, dy = y - closestY;
-            const distSq = dx * dx + dy * dy;
-            if (distSq < radius * radius && distSq > 0) {
-                const d = Math.sqrt(distSq);
-                const overlap = radius - d;
-                x += (dx / d) * overlap;
-                y += (dy / d) * overlap;
+            const tl = c * ts, tt = r * ts, tr = tl + ts, tb = tt + ts;
+            const cx = clamp(x, tl, tr), cy = clamp(y, tt, tb);
+            const dx = x - cx, dy = y - cy;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < radius * radius && dSq > 0) {
+                const d = Math.sqrt(dSq), overlap = radius - d;
+                x += (dx / d) * overlap; y += (dy / d) * overlap;
             }
         }
     }
@@ -497,7 +848,8 @@ function resolveWallCollision(x, y, radius) {
 }
 
 // ============================================================================
-//  PLAYER CLASS — Sir Fluffles 🐰 with top hat
+//  PLAYER — Sir Fluffles 🐰
+//  Enhanced with: hiding (#4), stick throwing (#7), caravan leading (#3)
 // ============================================================================
 class Player {
     constructor(x, y) {
@@ -506,376 +858,593 @@ class Player {
         this.speed = CONFIG.PLAYER_SPEED;
         this.radius = CONFIG.PLAYER_RADIUS;
         this.lives = CONFIG.PLAYER_LIVES;
-        this.facing = 1; // 1 = right, -1 = left
+        this.facing = 1;
 
-        // Dash state
+        // Dash
         this.isDashing = false;
         this.dashTimer = 0;
         this.dashCooldown = 0;
-        this.dashDirX = 0;
-        this.dashDirY = 0;
+        this.dashDirX = 0; this.dashDirY = 0;
 
-        // Invulnerability after being caught
+        // Invulnerability
         this.invulnTimer = 0;
 
         // Animation
-        this.moveTime = 0;    // Accumulates while moving for bounce
+        this.moveTime = 0;
         this.isMoving = false;
 
-        // Rescue progress
+        // Rescue
         this.rescueTarget = null;
         this.rescueProgress = 0;
+
+        // Hiding (#4)
+        this.isHiding = false;
+        this.hideProgress = 0; // 0 to 1
+
+        // Sticks (#7)
+        this.sticks = 0;
+        this.isAiming = false;
+        this.aimAngle = 0;
+
+        // Caravan (#3) — trail of past positions for followers
+        this.positionTrail = [];
+
+        // Lore notes collected (#9)
+        this.notesCollected = new Set();
     }
 
     update(dt, keys, game) {
-        // Timers
         if (this.dashCooldown > 0) this.dashCooldown -= dt;
         if (this.invulnTimer > 0) this.invulnTimer -= dt;
 
-        // Dash logic
+        const tCol = Math.floor(this.x / CONFIG.TILE_SIZE);
+        const tRow = Math.floor(this.y / CONFIG.TILE_SIZE);
+        const onBush = tileAt(tCol, tRow) === 5;
+        const onMud = tileAt(tCol, tRow) === 2;
+
+        // --- Hiding mechanic (#4) ---
+        if (keys["KeyQ"] && onBush && !this.isDashing && !this.isAiming) {
+            this.hideProgress = Math.min(1, this.hideProgress + dt / CONFIG.HIDE_ENTER_TIME);
+            if (this.hideProgress >= 1) this.isHiding = true;
+            this.vx = 0; this.vy = 0;
+            this.isMoving = false;
+            return; // Can't do anything else while hiding/entering hide
+        } else if (this.isHiding || this.hideProgress > 0) {
+            if (!keys["KeyQ"] || !onBush) {
+                this.hideProgress = Math.max(0, this.hideProgress - dt / CONFIG.HIDE_EXIT_TIME);
+                if (this.hideProgress <= 0) this.isHiding = false;
+                if (this.isHiding) { this.vx = 0; this.vy = 0; this.isMoving = false; return; }
+            } else {
+                this.vx = 0; this.vy = 0; this.isMoving = false;
+                return;
+            }
+        }
+
+        // --- Stick aiming/throwing (#7) ---
+        if (keys["KeyF"] && this.sticks > 0 && !this.isDashing) {
+            this.isAiming = true;
+            // Rotate aim with movement keys
+            if (keys["ArrowLeft"] || keys["KeyA"]) this.aimAngle -= CONFIG.STICK_AIM_SPEED * dt;
+            if (keys["ArrowRight"] || keys["KeyD"]) this.aimAngle += CONFIG.STICK_AIM_SPEED * dt;
+            if (keys["ArrowUp"] || keys["KeyW"]) this.aimAngle -= CONFIG.STICK_AIM_SPEED * dt * 0.5;
+            if (keys["ArrowDown"] || keys["KeyS"]) this.aimAngle += CONFIG.STICK_AIM_SPEED * dt * 0.5;
+            this.vx = 0; this.vy = 0;
+            this.isMoving = false;
+            return;
+        } else if (this.isAiming) {
+            // Released F — throw!
+            this.isAiming = false;
+            this.sticks--;
+            const throwX = this.x + Math.cos(this.aimAngle) * CONFIG.STICK_THROW_RANGE;
+            const throwY = this.y + Math.sin(this.aimAngle) * CONFIG.STICK_THROW_RANGE;
+            game.throwStick(this.x, this.y, throwX, throwY);
+            game.audio.playThrow();
+        }
+
+        // --- Dash logic ---
         if (this.isDashing) {
             this.dashTimer -= dt;
-            if (this.dashTimer <= 0) {
-                this.isDashing = false;
-            } else {
+            if (this.dashTimer <= 0) { this.isDashing = false; }
+            else {
                 this.vx = this.dashDirX * CONFIG.PLAYER_DASH_SPEED;
                 this.vy = this.dashDirY * CONFIG.PLAYER_DASH_SPEED;
                 game.particles.emitDash(this.x, this.y + 10);
             }
         } else {
-            // Normal movement
             let mx = 0, my = 0;
             if (keys["ArrowLeft"] || keys["KeyA"]) mx -= 1;
             if (keys["ArrowRight"] || keys["KeyD"]) mx += 1;
             if (keys["ArrowUp"] || keys["KeyW"]) my -= 1;
             if (keys["ArrowDown"] || keys["KeyS"]) my += 1;
-            // Normalize diagonal
             if (mx !== 0 && my !== 0) { mx *= 0.7071; my *= 0.7071; }
-            // Facing direction
             if (mx !== 0) this.facing = mx > 0 ? 1 : -1;
 
-            // Check mud
-            const tCol = Math.floor(this.x / CONFIG.TILE_SIZE);
-            const tRow = Math.floor(this.y / CONFIG.TILE_SIZE);
-            const onMud = tileAt(tCol, tRow) === 2;
             const speedMul = onMud ? CONFIG.MUD_SPEED_FACTOR : 1;
-
             this.vx = mx * this.speed * speedMul;
             this.vy = my * this.speed * speedMul;
 
-            // Dash trigger
-            if ((keys["Space"]) && this.dashCooldown <= 0 && (mx !== 0 || my !== 0)) {
+            if (keys["Space"] && this.dashCooldown <= 0 && (mx !== 0 || my !== 0)) {
                 this.isDashing = true;
                 this.dashTimer = CONFIG.PLAYER_DASH_DURATION;
                 this.dashCooldown = CONFIG.PLAYER_DASH_COOLDOWN;
                 const len = Math.sqrt(mx * mx + my * my) || 1;
-                this.dashDirX = mx / len;
-                this.dashDirY = my / len;
+                this.dashDirX = mx / len; this.dashDirY = my / len;
                 game.audio.playDash();
+                game.camera.shake(CONFIG.SHAKE_DASH_INTENSITY, CONFIG.SHAKE_DASH_DURATION);
             }
         }
 
         this.isMoving = (this.vx !== 0 || this.vy !== 0);
-        if (this.isMoving) this.moveTime += dt;
-        else this.moveTime = 0;
+        if (this.isMoving) this.moveTime += dt; else this.moveTime = 0;
 
-        // Apply velocity
-        this.x += this.vx * dt;
-        this.y += this.vy * dt;
-
-        // Resolve wall collisions
+        this.x += this.vx * dt; this.y += this.vy * dt;
         const resolved = resolveWallCollision(this.x, this.y, this.radius);
-        this.x = resolved.x;
-        this.y = resolved.y;
-
-        // Clamp to world
+        this.x = resolved.x; this.y = resolved.y;
         this.x = clamp(this.x, this.radius, WORLD_W - this.radius);
         this.y = clamp(this.y, this.radius, WORLD_H - this.radius);
 
-        // Rescue mechanic
-        if (keys["KeyE"] && !this.isDashing) {
-            // Find nearest un-rescued bunny in range
+        // Record position trail (for caravan followers)
+        this.positionTrail.push({ x: this.x, y: this.y });
+        if (this.positionTrail.length > CONFIG.FOLLOWER_TRAIL_SIZE * 12) {
+            this.positionTrail = this.positionTrail.slice(-CONFIG.FOLLOWER_TRAIL_SIZE * 12);
+        }
+
+        // --- Rescue mechanic ---
+        if (keys["KeyE"] && !this.isDashing && !this.isAiming) {
             let nearest = null, nearestDist = Infinity;
             for (const b of game.stuckBunnies) {
                 if (b.rescued) continue;
                 const d = dist(this.x, this.y, b.x, b.y);
-                if (d < CONFIG.RESCUE_RANGE && d < nearestDist) {
-                    nearestDist = d;
-                    nearest = b;
-                }
+                if (d < CONFIG.RESCUE_RANGE && d < nearestDist) { nearestDist = d; nearest = b; }
             }
             if (nearest) {
-                if (this.rescueTarget !== nearest) {
-                    this.rescueTarget = nearest;
-                    this.rescueProgress = 0;
-                }
+                if (this.rescueTarget !== nearest) { this.rescueTarget = nearest; this.rescueProgress = 0; }
                 this.rescueProgress += dt;
                 if (this.rescueProgress >= CONFIG.RESCUE_TIME) {
                     nearest.rescue(game);
                     this.rescueTarget = null;
                     this.rescueProgress = 0;
                 }
-            } else {
-                this.rescueTarget = null;
-                this.rescueProgress = 0;
-            }
-        } else {
-            this.rescueTarget = null;
-            this.rescueProgress = 0;
-        }
+            } else { this.rescueTarget = null; this.rescueProgress = 0; }
+        } else { this.rescueTarget = null; this.rescueProgress = 0; }
     }
 
     draw(ctx, cam) {
-        const sx = this.x - cam.x;
-        const sy = this.y - cam.y;
-
-        // Bounce offset while moving
+        const sx = this.x - cam.ex;
+        const sy = this.y - cam.ey;
         const bounce = this.isMoving ? Math.sin(this.moveTime * 10) * 3 : 0;
         const drawY = sy + bounce;
 
-        // Invulnerability blink
         if (this.invulnTimer > 0 && Math.floor(this.invulnTimer * 8) % 2 === 0) return;
 
         ctx.save();
         ctx.translate(sx, drawY);
+
+        // Hide transparency (#4)
+        if (this.hideProgress > 0) {
+            ctx.globalAlpha = 1 - this.hideProgress * 0.7;
+        }
+
         if (this.facing < 0) ctx.scale(-1, 1);
 
-        // Body — bunny emoji
+        // Body
         ctx.font = "28px serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("🐰", 0, 3);
 
-        // Top hat — drawn with canvas primitives
+        // Top hat
         ctx.fillStyle = "#1a1a1a";
-        // Hat brim
         ctx.fillRect(-10, -18, 20, 4);
-        // Hat crown
         ctx.fillRect(-7, -30, 14, 13);
-        // Hat band
         ctx.fillStyle = "#cc3333";
         ctx.fillRect(-7, -20, 14, 3);
 
+        // Leaf overlay when hiding
+        if (this.hideProgress > 0.5) {
+            ctx.globalAlpha = (this.hideProgress - 0.5) * 2;
+            ctx.font = "18px serif";
+            ctx.fillText("🍃", -5, -5);
+            ctx.fillText("🍃", 6, 6);
+        }
+
+        ctx.globalAlpha = 1;
         ctx.restore();
+
+        // Aim indicator (#7)
+        if (this.isAiming) {
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = "#ffcc00";
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            // Arc trajectory dots
+            const steps = 8;
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                const px = sx + Math.cos(this.aimAngle) * CONFIG.STICK_THROW_RANGE * t;
+                const py = sy + Math.sin(this.aimAngle) * CONFIG.STICK_THROW_RANGE * t - Math.sin(t * Math.PI) * 40;
+                ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Stick emoji at end
+            const endX = sx + Math.cos(this.aimAngle) * CONFIG.STICK_THROW_RANGE;
+            const endY = sy + Math.sin(this.aimAngle) * CONFIG.STICK_THROW_RANGE - Math.sin(Math.PI) * 40;
+            ctx.globalAlpha = 0.5;
+            ctx.font = "16px serif";
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText("🪵", endX, endY);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        }
     }
 }
 
 // ============================================================================
-//  REX CLASS — The Enemy 🐕 with state machine AI
-//  States: "wander", "chase", "return"
+//  REX — AI state machine with A* pathfinding, scent tracking, fetch, bush sniffing
+//  States: "wander", "chase", "sniff", "fetch", "return"
 // ============================================================================
 class Rex {
     constructor(x, y) {
         this.x = x; this.y = y;
         this.radius = CONFIG.REX_RADIUS;
         this.state = "wander";
-
-        // Wander
-        this.wanderDirX = 0;
-        this.wanderDirY = 0;
-        this.wanderTimer = 0;
-
-        // Chase
+        this.wanderDirX = 0; this.wanderDirY = 0; this.wanderTimer = 0;
         this.barkTimer = 0;
+        this.moveTime = 0; this.isMoving = false; this.facing = 1;
+        this.homeX = x; this.homeY = y;
 
-        // Animation
-        this.moveTime = 0;
-        this.isMoving = false;
-        this.facing = 1;
+        // Sniffing (#4)
+        this.sniffTimer = 0;
+        this.sniffTarget = null; // { x, y } of bush
 
-        // Pathfinding — simple: chase directly if line of sight,
-        // otherwise pick a nearby open tile to get closer
+        // Fetch (#7)
+        this.fetchTarget = null; // { x, y }
+        this.fetchTimer = 0;
+
+        // A* cache
         this.pathTarget = null;
-
-        // Home position for return state
-        this.homeX = x;
-        this.homeY = y;
+        this.pathRecalcTimer = 0;
     }
 
     update(dt, game) {
         const player = game.player;
         const d = dist(this.x, this.y, player.x, player.y);
         const los = hasLineOfSight(this.x, this.y, player.x, player.y);
+        const nightAmount = game.dayNight ? game.dayNight.nightAmount : 0;
+        const detectRadius = lerp(CONFIG.REX_DETECT_RADIUS, CONFIG.REX_DETECT_RADIUS_NIGHT, nightAmount);
+        const canSeePlayer = d < detectRadius && los && !player.isHiding;
 
         switch (this.state) {
             case "wander":
-                this._wander(dt, game);
-                // Detect player
-                if (d < CONFIG.REX_DETECT_RADIUS && los) {
-                    this.state = "chase";
-                    this.barkTimer = 0;
-                    game.audio.playBark();
-                    game.textPopups.push(new TextPopup(this.x, this.y - 30, "WOOF!", "#ff6600", 24, 0.8));
+                this._wander(dt);
+                if (canSeePlayer) {
+                    this._startChase(game);
+                } else {
+                    // Check scent trail (#5)
+                    this._checkScent(game, detectRadius);
                 }
                 break;
 
             case "chase":
                 this._chase(dt, game, player);
-                // Bark periodically
                 this.barkTimer += dt;
                 if (this.barkTimer >= CONFIG.REX_BARK_INTERVAL) {
                     this.barkTimer = 0;
                     game.audio.playBark();
                     game.textPopups.push(new TextPopup(this.x, this.y - 30, "WOOF!", "#ff6600", 24, 0.8));
+                    // Shake when nearby (#8)
+                    const barkDist = dist(this.x, this.y, player.x, player.y);
+                    if (barkDist < 300) {
+                        const intensity = CONFIG.SHAKE_BARK_INTENSITY * (1 - barkDist / 300);
+                        game.camera.shake(intensity, CONFIG.SHAKE_BARK_DURATION);
+                    }
                 }
                 // Lose player
-                if (d > CONFIG.REX_LOSE_RADIUS || (!los && d > CONFIG.REX_DETECT_RADIUS)) {
-                    this.state = "wander";
-                    this.wanderTimer = 0;
+                if (player.isHiding || (d > CONFIG.REX_LOSE_RADIUS && !los)) {
+                    if (player.isHiding && d < 60) {
+                        // Sniff the bush!
+                        this.state = "sniff";
+                        this.sniffTimer = CONFIG.REX_SNIFF_BUSH_TIME;
+                        this.sniffTarget = { x: player.x, y: player.y };
+                        game.audio.playSniff();
+                        game.textPopups.push(new TextPopup(this.x, this.y - 30, "sniff sniff...", "#ffaa44", 16, 1.2));
+                    } else if (!canSeePlayer) {
+                        // Lost — check scent before giving up
+                        const scent = game.scentTrail.getNearestPoint(this.x, this.y);
+                        if (scent && dist(this.x, this.y, scent.x, scent.y) < detectRadius) {
+                            this.state = "sniff_trail";
+                        } else {
+                            this.state = "wander";
+                            this.wanderTimer = 0;
+                        }
+                    }
                 }
-                // Catch player
-                if (d < CONFIG.REX_CATCH_DIST && player.invulnTimer <= 0) {
+                // Catch
+                if (d < CONFIG.REX_CATCH_DIST && player.invulnTimer <= 0 && !player.isHiding) {
                     game.playerCaught();
                 }
                 break;
 
-            case "return":
-                // Return to home after player respawns
-                this._moveToward(this.homeX, this.homeY, CONFIG.REX_WANDER_SPEED, dt);
-                if (dist(this.x, this.y, this.homeX, this.homeY) < 10) {
+            case "sniff":
+                // Sniffing a bush where player is hiding (#4)
+                this.sniffTimer -= dt;
+                this.isMoving = false;
+                // Face the bush
+                if (this.sniffTarget) {
+                    const dx = this.sniffTarget.x - this.x;
+                    if (dx !== 0) this.facing = dx > 0 ? 1 : -1;
+                }
+                if (this.sniffTimer <= 0) {
+                    // Give up and wander away
                     this.state = "wander";
+                    this.wanderTimer = 0;
+                    game.textPopups.push(new TextPopup(this.x, this.y - 30, "...?", "#999", 18, 0.8));
                 }
-                // Still detect during return
-                if (d < CONFIG.REX_DETECT_RADIUS && los) {
-                    this.state = "chase";
-                    this.barkTimer = 0;
-                    game.audio.playBark();
-                    game.textPopups.push(new TextPopup(this.x, this.y - 30, "WOOF!", "#ff6600", 24, 0.8));
+                // If player leaves bush during sniff, immediately chase
+                if (!player.isHiding && d < detectRadius && los) {
+                    this._startChase(game);
                 }
+                break;
+
+            case "sniff_trail":
+                // Following scent trail (#5)
+                const freshest = game.scentTrail.getFreshestPoint();
+                if (freshest) {
+                    this._moveToward(freshest.x, freshest.y, CONFIG.REX_WANDER_SPEED * 1.3, dt);
+                    // Occasional sniff text
+                    this.barkTimer += dt;
+                    if (this.barkTimer > 2.0) {
+                        this.barkTimer = 0;
+                        game.textPopups.push(new TextPopup(this.x, this.y - 25, "*sniff*", "#ffaa44", 14, 0.8));
+                    }
+                    // If we find the player
+                    if (canSeePlayer) this._startChase(game);
+                    // If scent runs out
+                    if (dist(this.x, this.y, freshest.x, freshest.y) < 20) {
+                        // Reached freshest point, remove it and look for next
+                        const idx = game.scentTrail.points.indexOf(freshest);
+                        if (idx >= 0) game.scentTrail.points.splice(idx, 1);
+                    }
+                } else {
+                    this.state = "wander";
+                    this.wanderTimer = 0;
+                }
+                break;
+
+            case "fetch":
+                // Chasing a thrown stick (#7)
+                if (this.fetchTarget) {
+                    this._moveToward(this.fetchTarget.x, this.fetchTarget.y, CONFIG.REX_CHASE_SPEED * 1.2, dt);
+                    if (dist(this.x, this.y, this.fetchTarget.x, this.fetchTarget.y) < 20) {
+                        // Got the stick! Happy bark
+                        game.textPopups.push(new TextPopup(this.x, this.y - 30, "ARF! 🦴", "#44cc44", 22, 1.0));
+                        this.fetchTarget = null;
+                    }
+                }
+                this.fetchTimer -= dt;
+                if (this.fetchTimer <= 0 || !this.fetchTarget) {
+                    this.state = "wander";
+                    this.wanderTimer = 0;
+                    this.fetchTarget = null;
+                }
+                // Don't detect player during fetch
+                break;
+
+            case "return":
+                this._moveToward(this.homeX, this.homeY, CONFIG.REX_WANDER_SPEED, dt);
+                if (dist(this.x, this.y, this.homeX, this.homeY) < 10) this.state = "wander";
+                if (canSeePlayer) this._startChase(game);
                 break;
         }
 
-        // Resolve wall collisions
         const resolved = resolveWallCollision(this.x, this.y, this.radius);
-        this.x = resolved.x;
-        this.y = resolved.y;
+        this.x = resolved.x; this.y = resolved.y;
     }
 
-    _wander(dt, game) {
+    _startChase(game) {
+        this.state = "chase";
+        this.barkTimer = 0;
+        this.pathRecalcTimer = 0;
+        game.audio.playBark();
+        game.textPopups.push(new TextPopup(this.x, this.y - 30, "WOOF!", "#ff6600", 24, 0.8));
+        game.music.setState("chase");
+    }
+
+    _checkScent(game, detectRadius) {
+        const nearest = game.scentTrail.getNearestPoint(this.x, this.y);
+        if (nearest && dist(this.x, this.y, nearest.x, nearest.y) < detectRadius * 0.5) {
+            this.state = "sniff_trail";
+            this.barkTimer = 0;
+            game.textPopups.push(new TextPopup(this.x, this.y - 25, "*sniff*", "#ffaa44", 14, 0.8));
+        }
+    }
+
+    startFetch(targetX, targetY) {
+        this.state = "fetch";
+        this.fetchTarget = { x: targetX, y: targetY };
+        this.fetchTimer = CONFIG.REX_FETCH_DURATION;
+    }
+
+    _wander(dt) {
         this.wanderTimer -= dt;
         if (this.wanderTimer <= 0) {
             const angle = rng(0, Math.PI * 2);
-            this.wanderDirX = Math.cos(angle);
-            this.wanderDirY = Math.sin(angle);
+            this.wanderDirX = Math.cos(angle); this.wanderDirY = Math.sin(angle);
             this.wanderTimer = rng(1.5, CONFIG.REX_WANDER_CHANGE);
         }
         this._applyMovement(this.wanderDirX, this.wanderDirY, CONFIG.REX_WANDER_SPEED, dt);
     }
 
     _chase(dt, game, player) {
-        // Direct chase if line of sight, otherwise simple steering
         const los = hasLineOfSight(this.x, this.y, player.x, player.y);
         if (los) {
             this._moveToward(player.x, player.y, CONFIG.REX_CHASE_SPEED, dt);
         } else {
-            // Try to navigate around obstacles — pick the open adjacent tile closest to player
-            this._pathfindStep(player.x, player.y, CONFIG.REX_CHASE_SPEED, dt);
+            // A* pathfinding (#2)
+            this.pathRecalcTimer -= dt;
+            if (this.pathRecalcTimer <= 0 || !this.pathTarget) {
+                this.pathRecalcTimer = 0.3; // Recalc every 300ms
+                this.pathTarget = astarPath(this.x, this.y, player.x, player.y);
+            }
+            if (this.pathTarget) {
+                this._moveToward(this.pathTarget.x, this.pathTarget.y, CONFIG.REX_CHASE_SPEED, dt);
+                if (dist(this.x, this.y, this.pathTarget.x, this.pathTarget.y) < 10) {
+                    this.pathTarget = null; // Reached intermediate step
+                }
+            } else {
+                // Fallback greedy
+                this._pathfindGreedy(player.x, player.y, CONFIG.REX_CHASE_SPEED, dt);
+            }
         }
+    }
+
+    _pathfindGreedy(targetX, targetY, speed, dt) {
+        const ts = CONFIG.TILE_SIZE;
+        const dirs = [
+            {dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1},
+            {dx:1,dy:1},{dx:1,dy:-1},{dx:-1,dy:1},{dx:-1,dy:-1},
+        ];
+        let bestDir = null, bestDist = Infinity;
+        const cc = Math.floor(this.x / ts), cr = Math.floor(this.y / ts);
+        for (const dir of dirs) {
+            const nc = cc + dir.dx, nr = cr + dir.dy;
+            if (isSolid(nc, nr)) continue;
+            if (dir.dx !== 0 && dir.dy !== 0) {
+                if (isSolid(cc + dir.dx, cr) || isSolid(cc, cr + dir.dy)) continue;
+            }
+            const cx = nc * ts + ts / 2, cy = nr * ts + ts / 2;
+            const d = dist(cx, cy, targetX, targetY);
+            if (d < bestDist) { bestDist = d; bestDir = { x: cx, y: cy }; }
+        }
+        if (bestDir) this._moveToward(bestDir.x, bestDir.y, speed, dt);
     }
 
     _moveToward(tx, ty, speed, dt) {
-        const dx = tx - this.x, dy = ty - this.y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d > 1) {
-            this._applyMovement(dx / d, dy / d, speed, dt);
-        }
-    }
-
-    _pathfindStep(targetX, targetY, speed, dt) {
-        // Simple greedy pathfinding: evaluate 8 directions, pick the one
-        // that is walkable and closest to the target
-        const ts = CONFIG.TILE_SIZE;
-        const dirs = [
-            {dx: 1, dy: 0}, {dx: -1, dy: 0}, {dx: 0, dy: 1}, {dx: 0, dy: -1},
-            {dx: 1, dy: 1}, {dx: 1, dy: -1}, {dx: -1, dy: 1}, {dx: -1, dy: -1},
-        ];
-        let bestDir = null, bestDist = Infinity;
-        const curCol = Math.floor(this.x / ts);
-        const curRow = Math.floor(this.y / ts);
-
-        for (const dir of dirs) {
-            const nc = curCol + dir.dx;
-            const nr = curRow + dir.dy;
-            if (isSolid(nc, nr)) continue;
-            // For diagonal, also check both adjacent cardinals are open
-            if (dir.dx !== 0 && dir.dy !== 0) {
-                if (isSolid(curCol + dir.dx, curRow) || isSolid(curCol, curRow + dir.dy)) continue;
-            }
-            const cx = nc * ts + ts / 2;
-            const cy = nr * ts + ts / 2;
-            const d = dist(cx, cy, targetX, targetY);
-            if (d < bestDist) {
-                bestDist = d;
-                bestDir = { x: cx, y: cy };
-            }
-        }
-        if (bestDir) {
-            this._moveToward(bestDir.x, bestDir.y, speed, dt);
-        } else {
-            // Fallback: just try to move toward target directly
-            this._moveToward(targetX, targetY, speed * 0.5, dt);
-        }
+        const dx = tx - this.x, dy = ty - this.y, d = Math.sqrt(dx*dx+dy*dy);
+        if (d > 1) this._applyMovement(dx/d, dy/d, speed, dt);
     }
 
     _applyMovement(dirX, dirY, speed, dt) {
-        this.x += dirX * speed * dt;
-        this.y += dirY * speed * dt;
-        this.isMoving = true;
-        this.moveTime += dt;
+        this.x += dirX * speed * dt; this.y += dirY * speed * dt;
+        this.isMoving = true; this.moveTime += dt;
         if (dirX !== 0) this.facing = dirX > 0 ? 1 : -1;
     }
 
-    draw(ctx, cam) {
-        const sx = this.x - cam.x;
-        const sy = this.y - cam.y;
+    draw(ctx, cam, nightAmount) {
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
         const bounce = this.isMoving ? Math.sin(this.moveTime * 8) * 4 : 0;
-        const drawY = sy + bounce;
 
         ctx.save();
-        ctx.translate(sx, drawY);
+        ctx.translate(sx, sy + bounce);
         if (this.facing < 0) ctx.scale(-1, 1);
 
-        // Rex emoji — scaled up 2x
         ctx.font = "48px serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("🐕", 0, 0);
 
-        // Chase indicator — red glow
+        // Chase glow
         if (this.state === "chase") {
             ctx.globalAlpha = 0.15 + Math.sin(this.moveTime * 6) * 0.1;
             ctx.fillStyle = "#ff0000";
-            ctx.beginPath();
-            ctx.arc(0, 0, 32, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1;
+            ctx.beginPath(); ctx.arc(0, 0, 32, 0, Math.PI * 2); ctx.fill();
         }
 
+        // Glowing red eyes at night (#1)
+        if (nightAmount > 0.3) {
+            ctx.globalAlpha = nightAmount * 0.8;
+            ctx.fillStyle = "#ff0000";
+            ctx.beginPath(); ctx.arc(-6, -6, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(6, -6, 3, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Sniff animation
+        if (this.state === "sniff" || this.state === "sniff_trail") {
+            ctx.globalAlpha = 0.5 + Math.sin(this.moveTime * 10) * 0.3;
+            ctx.font = "14px serif";
+            ctx.fillText("👃", 14, -10);
+        }
+
+        ctx.globalAlpha = 1;
         ctx.restore();
         this.isMoving = false;
     }
 }
 
 // ============================================================================
-//  STUCK BUNNY CLASS — 🐇 trembling, waiting to be rescued
+//  FOLLOWER BUNNY — Rescued bunny following Sir Fluffles (#3 Caravan)
+// ============================================================================
+class FollowerBunny {
+    constructor(x, y, index) {
+        this.x = x; this.y = y;
+        this.index = index; // Position in caravan (0 = directly behind player)
+        this.time = rng(0, 10);
+        this.scattered = false;
+    }
+
+    update(dt, game) {
+        this.time += dt;
+        if (this.scattered) return;
+
+        // Follow the player's position trail
+        const trail = game.player.positionTrail;
+        const trailIdx = trail.length - 1 - (this.index + 1) * 8; // Spacing in trail
+        if (trailIdx >= 0 && trailIdx < trail.length) {
+            const target = trail[trailIdx];
+            this.x = lerp(this.x, target.x, 8 * dt);
+            this.y = lerp(this.y, target.y, 8 * dt);
+        }
+    }
+
+    scatter(game) {
+        // Find a random walkable tile nearby to get stuck at again
+        this.scattered = true;
+        const ts = CONFIG.TILE_SIZE;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const col = Math.floor(this.x / ts) + rngInt(-5, 5);
+            const row = Math.floor(this.y / ts) + rngInt(-5, 5);
+            if (col > 0 && col < MAP_COLS - 1 && row > 0 && row < MAP_ROWS - 1 && !isSolid(col, row)) {
+                const pos = tileCenter(col, row);
+                // Re-add as stuck bunny
+                const newStuck = new StuckBunny(col, row);
+                game.stuckBunnies.push(newStuck);
+                game.particles.emitScatter(this.x, this.y);
+                return;
+            }
+        }
+        // Fallback — re-stuck at current position
+        const col = Math.floor(this.x / ts), row = Math.floor(this.y / ts);
+        game.stuckBunnies.push(new StuckBunny(col, row));
+    }
+
+    draw(ctx, cam) {
+        if (this.scattered) return;
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
+        const bounce = Math.sin(this.time * 8 + this.index) * 2;
+        ctx.font = "18px serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🐇", sx, sy + bounce);
+    }
+}
+
+// ============================================================================
+//  STUCK BUNNY — 🐇 trembling, waiting to be rescued
 // ============================================================================
 class StuckBunny {
     constructor(col, row) {
         const pos = tileCenter(col, row);
-        this.x = pos.x;
-        this.y = pos.y;
-        this.col = col;
-        this.row = row;
+        this.x = pos.x; this.y = pos.y;
+        this.col = col; this.row = row;
         this.rescued = false;
-        this.rescueAnim = 0; // Timer for happy jump after rescue
-        this.time = rng(0, 10); // Offset for trembling
+        this.rescueAnim = 0;
+        this.time = rng(0, 10);
     }
 
     update(dt) {
         this.time += dt;
-        if (this.rescued && this.rescueAnim > 0) {
-            this.rescueAnim -= dt;
-        }
+        if (this.rescued && this.rescueAnim > 0) this.rescueAnim -= dt;
     }
 
     rescue(game) {
@@ -883,175 +1452,382 @@ class StuckBunny {
         this.rescueAnim = 0.8;
         game.particles.emitHearts(this.x, this.y);
         game.audio.playRescue();
-        game.rescuedCount++;
+        game.camera.shake(CONFIG.SHAKE_RESCUE_INTENSITY, CONFIG.SHAKE_RESCUE_DURATION);
+        game.camera.zoomPulse(1.03, 0.4);
         game.textPopups.push(new TextPopup(this.x, this.y - 20, "Rescued! ❤️", "#ff69b4", 18, 1.2));
-        if (game.rescuedCount >= STUCK_BUNNY_POSITIONS.length) {
-            game.winGame();
-        }
+
+        // Add to caravan (#3) instead of counting as fully rescued
+        const follower = new FollowerBunny(this.x, this.y, game.followers.length);
+        game.followers.push(follower);
+        game.music.addVoice();
     }
 
-    draw(ctx, cam) {
+    draw(ctx, cam, nightAmount) {
         if (this.rescued && this.rescueAnim <= 0) return;
-
-        const sx = this.x - cam.x;
-        const sy = this.y - cam.y;
-
-        // Trembling = rapid tiny random offset
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
         const tremble = this.rescued ? 0 : Math.sin(this.time * 30) * 1.5;
-        // Happy jump when rescued
         const jumpY = this.rescued ? -Math.sin((0.8 - this.rescueAnim) / 0.8 * Math.PI) * 30 : 0;
-
         const alpha = this.rescued ? clamp(this.rescueAnim / 0.3, 0, 1) : 1;
         ctx.globalAlpha = alpha;
 
         ctx.font = "22px serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("🐇", sx + tremble, sy + jumpY);
 
-        // Exclamation mark if not rescued — help me!
         if (!this.rescued) {
             ctx.font = "bold 14px Arial";
             ctx.fillStyle = "#ff4444";
             ctx.fillText("❗", sx, sy - 20 + Math.sin(this.time * 3) * 3);
-        }
 
+            // Night SOS sparkle (#1)
+            if (nightAmount > 0.3) {
+                ctx.globalAlpha = nightAmount * (0.4 + Math.sin(this.time * 5) * 0.3);
+                ctx.fillStyle = "#88ccff";
+                ctx.beginPath();
+                ctx.arc(sx, sy, CONFIG.BUNNY_SPARKLE_RADIUS * (0.6 + Math.sin(this.time * 3) * 0.4), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
         ctx.globalAlpha = 1;
     }
 }
 
 // ============================================================================
-//  CHECKPOINT CLASS — Carrot Shrine
+//  THROWN STICK — Projectile entity (#7)
+// ============================================================================
+class ThrownStick {
+    constructor(sx, sy, tx, ty) {
+        this.x = sx; this.y = sy;
+        this.tx = tx; this.ty = ty;
+        const dx = tx - sx, dy = ty - sy;
+        const d = Math.sqrt(dx*dx + dy*dy) || 1;
+        this.vx = (dx / d) * CONFIG.STICK_THROW_SPEED;
+        this.vy = (dy / d) * CONFIG.STICK_THROW_SPEED;
+        this.flying = true;
+        this.time = 0;
+        this.totalDist = d;
+        this.travelledDist = 0;
+    }
+
+    update(dt) {
+        if (!this.flying) return;
+        this.time += dt;
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.travelledDist += CONFIG.STICK_THROW_SPEED * dt;
+
+        // Resolve collision with walls
+        const col = Math.floor(this.x / CONFIG.TILE_SIZE);
+        const row = Math.floor(this.y / CONFIG.TILE_SIZE);
+        if (isSolid(col, row) || this.travelledDist >= this.totalDist) {
+            this.flying = false;
+            // Snap to last valid position
+            if (isSolid(col, row)) {
+                this.x -= this.vx * dt;
+                this.y -= this.vy * dt;
+            }
+        }
+    }
+
+    draw(ctx, cam) {
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
+        const arc = this.flying ? -Math.sin((this.travelledDist / this.totalDist) * Math.PI) * 30 : 0;
+        ctx.save();
+        ctx.translate(sx, sy + arc);
+        if (this.flying) ctx.rotate(this.time * 10);
+        ctx.font = "16px serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🪵", 0, 0);
+        ctx.restore();
+    }
+}
+
+// ============================================================================
+//  STICK PICKUP — Collectible stick on the map (#7)
+// ============================================================================
+class StickPickup {
+    constructor(col, row) {
+        const pos = tileCenter(col, row);
+        this.x = pos.x; this.y = pos.y;
+        this.col = col; this.row = row;
+        this.collected = false;
+        this.respawnTimer = 0;
+        this.time = rng(0, 10);
+    }
+
+    update(dt, game) {
+        this.time += dt;
+        if (this.collected) {
+            this.respawnTimer -= dt;
+            if (this.respawnTimer <= 0) this.collected = false;
+            return;
+        }
+        // Check player pickup
+        if (dist(game.player.x, game.player.y, this.x, this.y) < 30) {
+            this.collected = true;
+            this.respawnTimer = CONFIG.STICK_RESPAWN_TIME;
+            game.player.sticks++;
+            game.audio.playPickup();
+            game.textPopups.push(new TextPopup(this.x, this.y - 15, "+1 Stick 🪵", "#DEB887", 14, 0.8));
+        }
+    }
+
+    draw(ctx, cam) {
+        if (this.collected) return;
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
+        ctx.font = "20px serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🪵", sx, sy + Math.sin(this.time * 2) * 3);
+
+        // Subtle glow
+        ctx.globalAlpha = 0.15 + Math.sin(this.time * 3) * 0.1;
+        ctx.fillStyle = "#DEB887";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ============================================================================
+//  LORE NOTE — Pickup that shows a story popup (#9)
+// ============================================================================
+class LoreNote {
+    constructor(data) {
+        const pos = tileCenter(data.col, data.row);
+        this.x = pos.x; this.y = pos.y;
+        this.title = data.title;
+        this.text = data.text;
+        this.collected = false;
+        this.time = rng(0, 10);
+    }
+
+    update(dt, game) {
+        this.time += dt;
+        if (this.collected) return;
+        if (dist(game.player.x, game.player.y, this.x, this.y) < 30) {
+            this.collected = true;
+            game.player.notesCollected.add(this.title);
+            game.audio.playNote();
+            game.showingNote = this;
+            game.noteTimer = 0; // Player dismisses with any key
+        }
+    }
+
+    draw(ctx, cam) {
+        if (this.collected) return;
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
+        ctx.font = "20px serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("📜", sx, sy + Math.sin(this.time * 2) * 2);
+
+        ctx.globalAlpha = 0.12 + Math.sin(this.time * 3) * 0.08;
+        ctx.fillStyle = "#ffffaa";
+        ctx.beginPath(); ctx.arc(sx, sy, 18, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ============================================================================
+//  CHECKPOINT — Carrot Shrine (also deposits caravan bunnies #3)
 // ============================================================================
 class Checkpoint {
     constructor(col, row) {
         const pos = tileCenter(col, row);
-        this.x = pos.x;
-        this.y = pos.y;
-        this.col = col;
-        this.row = row;
+        this.x = pos.x; this.y = pos.y;
+        this.col = col; this.row = row;
         this.activated = false;
         this.time = 0;
     }
+    update(dt) { this.time += dt; }
 
-    update(dt) {
-        this.time += dt;
-    }
+    draw(ctx, cam, nightAmount) {
+        const sx = this.x - cam.ex, sy = this.y - cam.ey;
 
-    draw(ctx, cam) {
-        const sx = this.x - cam.x;
-        const sy = this.y - cam.y;
-
-        // Glow
-        const glowAlpha = this.activated ? 0.25 + Math.sin(this.time * 3) * 0.1 : 0.08;
-        const glowColor = this.activated ? "#ffaa00" : "#666666";
-        ctx.fillStyle = glowColor;
+        // Glow (brighter at night for activated #1)
+        const nightBoost = this.activated ? nightAmount * 0.3 : 0;
+        const glowAlpha = (this.activated ? 0.25 + Math.sin(this.time * 3) * 0.1 : 0.08) + nightBoost;
+        ctx.fillStyle = this.activated ? "#ffaa00" : "#666666";
         ctx.globalAlpha = glowAlpha;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 24, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(sx, sy, 24 + nightBoost * 30, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
 
-        // Carrot emoji
         ctx.font = "26px serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("🥕", sx, sy + Math.sin(this.time * 2) * 2);
 
-        // Activated ring
         if (this.activated) {
             ctx.strokeStyle = "#ffcc00";
             ctx.lineWidth = 2;
             ctx.globalAlpha = 0.5 + Math.sin(this.time * 4) * 0.3;
-            ctx.beginPath();
-            ctx.arc(sx, sy, 20, 0, Math.PI * 2);
-            ctx.stroke();
+            ctx.beginPath(); ctx.arc(sx, sy, 20, 0, Math.PI * 2); ctx.stroke();
             ctx.globalAlpha = 1;
         }
     }
 }
 
 // ============================================================================
-//  MAP RENDERER — Draws the tile map (only visible tiles for performance)
+//  DAY/NIGHT CYCLE (#1)
+// ============================================================================
+class DayNightCycle {
+    constructor() {
+        this.time = 0;
+        this.nightAmount = 0; // 0 = full day, 1 = deepest night
+        this._lightCanvas = null;
+        this._lightCtx = null;
+    }
+
+    init(width, height) {
+        this._lightCanvas = document.createElement("canvas");
+        this._lightCanvas.width = width;
+        this._lightCanvas.height = height;
+        this._lightCtx = this._lightCanvas.getContext("2d");
+    }
+
+    update(dt) {
+        this.time += dt;
+        // Sine wave: 0 at noon, 1 at midnight
+        const cycle = (Math.sin(this.time * Math.PI * 2 / CONFIG.DAY_CYCLE_DURATION - Math.PI / 2) + 1) / 2;
+        this.nightAmount = cycle;
+    }
+
+    // Draw darkness overlay with light holes
+    drawLighting(mainCtx, cam, game) {
+        if (this.nightAmount < 0.05) return; // Skip if basically daytime
+
+        const lc = this._lightCtx;
+        const w = CONFIG.CANVAS_WIDTH, h = CONFIG.CANVAS_HEIGHT;
+
+        // Fill with darkness
+        lc.clearRect(0, 0, w, h);
+        const darkness = this.nightAmount * 0.85; // Max 85% dark
+        lc.fillStyle = `rgba(5, 5, 25, ${darkness})`;
+        lc.fillRect(0, 0, w, h);
+
+        // Cut light holes using 'destination-out'
+        lc.globalCompositeOperation = "destination-out";
+
+        // Player lantern light
+        const playerR = lerp(CONFIG.PLAYER_LIGHT_RADIUS_DAY, CONFIG.PLAYER_LIGHT_RADIUS_NIGHT, this.nightAmount);
+        const px = game.player.x - cam.ex, py = game.player.y - cam.ey;
+        const plGrad = lc.createRadialGradient(px, py, 0, px, py, playerR);
+        plGrad.addColorStop(0, "rgba(0,0,0,1)");
+        plGrad.addColorStop(0.7, "rgba(0,0,0,0.6)");
+        plGrad.addColorStop(1, "rgba(0,0,0,0)");
+        lc.fillStyle = plGrad;
+        lc.fillRect(px - playerR, py - playerR, playerR * 2, playerR * 2);
+
+        // Checkpoint beacon lights
+        for (const cp of game.checkpoints) {
+            if (!cp.activated) continue;
+            const cx = cp.x - cam.ex, cy = cp.y - cam.ey;
+            const r = CONFIG.CHECKPOINT_LIGHT_RADIUS;
+            const cpGrad = lc.createRadialGradient(cx, cy, 0, cx, cy, r);
+            cpGrad.addColorStop(0, "rgba(0,0,0,0.9)");
+            cpGrad.addColorStop(1, "rgba(0,0,0,0)");
+            lc.fillStyle = cpGrad;
+            lc.fillRect(cx - r, cy - r, r * 2, r * 2);
+        }
+
+        // Stuck bunny SOS sparkles
+        for (const b of game.stuckBunnies) {
+            if (b.rescued) continue;
+            const bx = b.x - cam.ex, by = b.y - cam.ey;
+            const r = CONFIG.BUNNY_SPARKLE_RADIUS;
+            const bGrad = lc.createRadialGradient(bx, by, 0, bx, by, r);
+            bGrad.addColorStop(0, "rgba(0,0,0,0.5)");
+            bGrad.addColorStop(1, "rgba(0,0,0,0)");
+            lc.fillStyle = bGrad;
+            lc.fillRect(bx - r, by - r, r * 2, r * 2);
+        }
+
+        // Rex's eyes glow (small red light)
+        if (this.nightAmount > 0.3) {
+            const rx = game.rex.x - cam.ex, ry = game.rex.y - cam.ey;
+            const rGrad = lc.createRadialGradient(rx, ry, 0, rx, ry, 30);
+            rGrad.addColorStop(0, "rgba(0,0,0,0.3)");
+            rGrad.addColorStop(1, "rgba(0,0,0,0)");
+            lc.fillStyle = rGrad;
+            lc.fillRect(rx - 30, ry - 30, 60, 60);
+        }
+
+        lc.globalCompositeOperation = "source-over";
+
+        // Draw the lighting overlay onto the main canvas
+        mainCtx.drawImage(this._lightCanvas, 0, 0);
+
+        // Tint: slight blue at night
+        if (this.nightAmount > 0.2) {
+            mainCtx.fillStyle = `rgba(20, 20, 60, ${this.nightAmount * 0.15})`;
+            mainCtx.fillRect(0, 0, w, h);
+        }
+    }
+}
+
+// ============================================================================
+//  MAP RENDERER
 // ============================================================================
 class MapRenderer {
     constructor() {
-        // Grass color variations (seeded by position for consistency)
         this.grassVariants = ["#5a8a3c", "#4d7a33", "#63943f", "#578637"];
     }
 
     draw(ctx, cam) {
         const ts = CONFIG.TILE_SIZE;
-        const startCol = Math.max(0, Math.floor(cam.x / ts));
-        const startRow = Math.max(0, Math.floor(cam.y / ts));
-        const endCol = Math.min(MAP_COLS - 1, Math.ceil((cam.x + cam.viewW) / ts));
-        const endRow = Math.min(MAP_ROWS - 1, Math.ceil((cam.y + cam.viewH) / ts));
+        const startCol = Math.max(0, Math.floor(cam.ex / ts));
+        const startRow = Math.max(0, Math.floor(cam.ey / ts));
+        const endCol = Math.min(MAP_COLS - 1, Math.ceil((cam.ex + cam.viewW) / ts));
+        const endRow = Math.min(MAP_ROWS - 1, Math.ceil((cam.ey + cam.viewH) / ts));
 
         for (let r = startRow; r <= endRow; r++) {
             for (let c = startCol; c <= endCol; c++) {
                 const tile = tileAt(c, r);
-                const x = c * ts - cam.x;
-                const y = r * ts - cam.y;
+                const x = c * ts - cam.ex;
+                const y = r * ts - cam.ey;
 
-                // Base grass everywhere
                 ctx.fillStyle = this.grassVariants[(c + r * 3) % this.grassVariants.length];
-                ctx.fillRect(x, y, ts, ts);
+                ctx.fillRect(x, y, ts + 1, ts + 1);
 
                 switch (tile) {
-                    case 1: // Tree / Wall
-                        this._drawTree(ctx, x, y, ts, c, r);
-                        break;
-                    case 2: // Mud
+                    case 1: this._drawTree(ctx, x, y, ts, c, r); break;
+                    case 2:
                         ctx.fillStyle = "#8B7355";
                         ctx.fillRect(x + 1, y + 1, ts - 2, ts - 2);
-                        // Mud splotches
                         ctx.fillStyle = "#7a6348";
                         ctx.beginPath();
                         ctx.arc(x + ts * 0.3, y + ts * 0.6, 6, 0, Math.PI * 2);
                         ctx.arc(x + ts * 0.7, y + ts * 0.3, 5, 0, Math.PI * 2);
                         ctx.fill();
                         break;
-                    case 4: // Hollow Log
+                    case 4:
                         ctx.fillStyle = "#6d4c2a";
                         ctx.fillRect(x + 8, y + 14, ts - 16, ts - 28);
                         ctx.fillStyle = "#4a3318";
-                        ctx.beginPath();
-                        ctx.arc(x + ts / 2, y + ts / 2, 8, 0, Math.PI * 2);
-                        ctx.fill();
+                        ctx.beginPath(); ctx.arc(x + ts/2, y + ts/2, 8, 0, Math.PI * 2); ctx.fill();
                         break;
-                    case 5: // Bush
-                        ctx.font = "20px serif";
-                        ctx.textAlign = "center";
-                        ctx.textBaseline = "middle";
-                        ctx.fillText("🌿", x + ts / 2, y + ts / 2);
+                    case 5:
+                        ctx.font = "20px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                        ctx.fillText("🌿", x + ts/2, y + ts/2);
                         break;
-                    case 6: // Rock
-                        ctx.fillStyle = "#888888";
-                        ctx.beginPath();
-                        ctx.arc(x + ts / 2, y + ts / 2 + 4, 16, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.fillStyle = "#999999";
-                        ctx.beginPath();
-                        ctx.arc(x + ts / 2 - 3, y + ts / 2, 12, 0, Math.PI * 2);
-                        ctx.fill();
+                    case 6:
+                        ctx.fillStyle = "#888";
+                        ctx.beginPath(); ctx.arc(x + ts/2, y + ts/2 + 4, 16, 0, Math.PI * 2); ctx.fill();
+                        ctx.fillStyle = "#999";
+                        ctx.beginPath(); ctx.arc(x + ts/2 - 3, y + ts/2, 12, 0, Math.PI * 2); ctx.fill();
                         break;
-                    case 7: // Flowers
-                        ctx.font = "16px serif";
-                        ctx.textAlign = "center";
-                        ctx.textBaseline = "middle";
-                        const flowers = ["🌸", "🌼", "💐"];
-                        ctx.fillText(flowers[(c + r) % 3], x + ts / 2, y + ts / 2);
+                    case 7:
+                        ctx.font = "16px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                        ctx.fillText(["🌸","🌼","💐"][(c+r)%3], x + ts/2, y + ts/2);
                         break;
-                    case 8: // Water
-                        ctx.fillStyle = "#3366aa";
-                        ctx.fillRect(x, y, ts, ts);
-                        ctx.fillStyle = "#4488cc";
-                        ctx.globalAlpha = 0.4;
-                        // Animated wave lines
-                        const waveOffset = Math.sin(performance.now() / 500 + c + r) * 4;
-                        ctx.fillRect(x + 4, y + 12 + waveOffset, ts - 8, 3);
-                        ctx.fillRect(x + 8, y + 28 - waveOffset, ts - 16, 2);
+                    case 8:
+                        ctx.fillStyle = "#3366aa"; ctx.fillRect(x, y, ts, ts);
+                        ctx.fillStyle = "#4488cc"; ctx.globalAlpha = 0.4;
+                        const wo = Math.sin(performance.now()/500 + c + r) * 4;
+                        ctx.fillRect(x+4, y+12+wo, ts-8, 3);
+                        ctx.fillRect(x+8, y+28-wo, ts-16, 2);
                         ctx.globalAlpha = 1;
+                        break;
+                    case 9: // Stick spawn — just grass (stick pickup entity handles the visual)
                         break;
                 }
             }
@@ -1059,158 +1835,160 @@ class MapRenderer {
     }
 
     _drawTree(ctx, x, y, ts, c, r) {
-        // Trunk
         ctx.fillStyle = "#5c3d1e";
-        ctx.fillRect(x + ts / 2 - 5, y + ts / 2, 10, ts / 2);
-        // Canopy — circle
-        const canopyColor = (c + r) % 3 === 0 ? "#2d6b2d" : (c + r) % 3 === 1 ? "#1e5f1e" : "#3a7a3a";
-        ctx.fillStyle = canopyColor;
-        ctx.beginPath();
-        ctx.arc(x + ts / 2, y + ts / 3, 18, 0, Math.PI * 2);
-        ctx.fill();
-        // Highlight
-        ctx.fillStyle = "#4a9a4a";
-        ctx.globalAlpha = 0.4;
-        ctx.beginPath();
-        ctx.arc(x + ts / 2 - 4, y + ts / 3 - 4, 8, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(x + ts/2 - 5, y + ts/2, 10, ts/2);
+        const cc = (c+r)%3;
+        ctx.fillStyle = cc===0 ? "#2d6b2d" : cc===1 ? "#1e5f1e" : "#3a7a3a";
+        ctx.beginPath(); ctx.arc(x + ts/2, y + ts/3, 18, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#4a9a4a"; ctx.globalAlpha = 0.4;
+        ctx.beginPath(); ctx.arc(x + ts/2 - 4, y + ts/3 - 4, 8, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
     }
 }
 
 // ============================================================================
-//  HUD — Draws lives, rescue count, dash cooldown, rescue progress bar
+//  HUD — Lives, rescued, sticks, dash, timer, notes
 // ============================================================================
 class HUD {
-    constructor() {}
-
     draw(ctx, game) {
         const p = game.player;
 
-        // Lives (carrot icons)
-        ctx.font = "24px serif";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
-        for (let i = 0; i < p.lives; i++) {
-            ctx.fillText("🥕", 12 + i * 30, 12);
+        // Lives
+        ctx.font = "24px serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        for (let i = 0; i < p.lives; i++) ctx.fillText("🥕", 12 + i * 30, 12);
+
+        // Rescued / Banked
+        ctx.font = "bold 14px Arial"; ctx.fillStyle = "#ffffff";
+        ctx.fillText(`Banked: ${game.rescuedCount}/${STUCK_BUNNY_POSITIONS.length}`, 12, 44);
+
+        // Caravan
+        if (game.followers.length > 0) {
+            ctx.fillStyle = "#ffcc44";
+            ctx.fillText(`Following: ${game.followers.length} 🐇`, 12, 62);
         }
 
-        // Rescued count
-        ctx.font = "bold 16px Arial";
-        ctx.fillStyle = "#ffffff";
-        ctx.textAlign = "left";
-        ctx.fillText(`Rescued: ${game.rescuedCount} / ${STUCK_BUNNY_POSITIONS.length}`, 12, 44);
+        // Sticks
+        if (p.sticks > 0) {
+            ctx.fillStyle = "#DEB887";
+            ctx.fillText(`Sticks: ${p.sticks} 🪵 [F]`, 12, game.followers.length > 0 ? 80 : 62);
+        }
 
-        // Dash cooldown bar
+        // Dash cooldown
+        const dashY = game.followers.length > 0 ? (p.sticks > 0 ? 98 : 80) : (p.sticks > 0 ? 80 : 62);
         const dashPct = p.dashCooldown > 0 ? 1 - p.dashCooldown / CONFIG.PLAYER_DASH_COOLDOWN : 1;
-        ctx.fillStyle = "#333";
-        ctx.fillRect(12, 68, 100, 8);
+        ctx.fillStyle = "#333"; ctx.fillRect(12, dashY + 6, 100, 8);
         ctx.fillStyle = dashPct >= 1 ? "#00ccff" : "#006688";
-        ctx.fillRect(12, 68, 100 * dashPct, 8);
-        ctx.font = "10px Arial";
-        ctx.fillStyle = "#aaa";
-        ctx.fillText("DASH [SPACE]", 12, 82);
+        ctx.fillRect(12, dashY + 6, 100 * dashPct, 8);
+        ctx.font = "10px Arial"; ctx.fillStyle = "#aaa";
+        ctx.fillText("DASH [SPACE]", 12, dashY + 20);
 
-        // Rescue progress arc (drawn over the bunny in world space — handled separately)
+        // Notes collected (#9)
+        if (p.notesCollected.size > 0) {
+            ctx.fillStyle = "#ffffaa"; ctx.font = "11px Arial";
+            ctx.fillText(`📜 ${p.notesCollected.size}/${LORE_NOTES.length}`, 120, dashY + 6);
+        }
+
+        // Speedrun timer (#10)
+        if (game.state === "playing") {
+            const elapsed = game.playTimer;
+            const mins = Math.floor(elapsed / 60);
+            const secs = Math.floor(elapsed % 60);
+            const ms = Math.floor((elapsed % 1) * 100);
+            ctx.font = "bold 16px monospace";
+            ctx.fillStyle = "#ffffff";
+            ctx.textAlign = "right";
+            ctx.fillText(`${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}.${String(ms).padStart(2,"0")}`, CONFIG.CANVAS_WIDTH - CONFIG.MINIMAP_SIZE - CONFIG.MINIMAP_MARGIN - 10, 20);
+            ctx.textAlign = "left";
+        }
+
+        // Day/Night indicator
+        if (game.dayNight) {
+            const na = game.dayNight.nightAmount;
+            const icon = na < 0.3 ? "☀️" : na < 0.7 ? "🌅" : "🌙";
+            ctx.font = "18px serif"; ctx.textAlign = "right";
+            ctx.fillText(icon, CONFIG.CANVAS_WIDTH - CONFIG.MINIMAP_SIZE - CONFIG.MINIMAP_MARGIN - 10, 42);
+            ctx.textAlign = "left";
+        }
+
+        // Hide indicator
+        if (p.isHiding) {
+            ctx.font = "bold 14px Arial"; ctx.fillStyle = "#44ff44"; ctx.textAlign = "center";
+            ctx.fillText("🍃 HIDDEN 🍃", CONFIG.CANVAS_WIDTH / 2, 20);
+            ctx.textAlign = "left";
+        } else if (p.hideProgress > 0) {
+            ctx.font = "bold 14px Arial"; ctx.fillStyle = "#88bb88"; ctx.textAlign = "center";
+            ctx.fillText("Hiding...", CONFIG.CANVAS_WIDTH / 2, 20);
+            ctx.textAlign = "left";
+        }
     }
 
     drawRescueProgress(ctx, cam, game) {
         const p = game.player;
         if (!p.rescueTarget || p.rescueProgress <= 0) return;
-
         const b = p.rescueTarget;
-        const sx = b.x - cam.x;
-        const sy = b.y - cam.y;
+        const sx = b.x - cam.ex, sy = b.y - cam.ey;
         const pct = p.rescueProgress / CONFIG.RESCUE_TIME;
 
-        // Background circle
-        ctx.strokeStyle = "rgba(255,255,255,0.3)";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.arc(sx, sy - 20, 14, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(sx, sy - 20, 14, 0, Math.PI * 2); ctx.stroke();
 
-        // Progress arc
-        ctx.strokeStyle = "#00ff88";
-        ctx.lineWidth = 4;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.arc(sx, sy - 20, 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pct);
-        ctx.stroke();
+        ctx.strokeStyle = "#00ff88"; ctx.lineWidth = 4; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.arc(sx, sy - 20, 14, -Math.PI/2, -Math.PI/2 + Math.PI * 2 * pct); ctx.stroke();
         ctx.lineCap = "butt";
 
-        // "E" label
-        ctx.font = "bold 11px Arial";
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.font = "bold 11px Arial"; ctx.fillStyle = "#fff";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("E", sx, sy - 20);
     }
 }
 
 // ============================================================================
-//  MINIMAP — Top-right corner overview showing Rex (red) and bunnies (blue)
+//  MINIMAP
 // ============================================================================
 class Minimap {
     draw(ctx, game) {
-        const size = CONFIG.MINIMAP_SIZE;
-        const margin = CONFIG.MINIMAP_MARGIN;
-        const ox = CONFIG.CANVAS_WIDTH - size - margin;
-        const oy = margin;
-        const scaleX = size / WORLD_W;
-        const scaleY = size / WORLD_H;
+        const size = CONFIG.MINIMAP_SIZE, margin = CONFIG.MINIMAP_MARGIN;
+        const ox = CONFIG.CANVAS_WIDTH - size - margin, oy = margin;
+        const scaleX = size / WORLD_W, scaleY = size / WORLD_H;
 
-        // Background
-        ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-        ctx.fillRect(ox - 2, oy - 2, size + 4, size + 4);
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(ox-2, oy-2, size+4, size+4);
 
-        // Tiles (simplified — just walls)
         const ts = CONFIG.TILE_SIZE;
-        const ts_mini_w = ts * scaleX;
-        const ts_mini_h = ts * scaleY;
+        const tw = ts * scaleX, th = ts * scaleY;
         for (let r = 0; r < MAP_ROWS; r++) {
             for (let c = 0; c < MAP_COLS; c++) {
                 const t = tileAt(c, r);
-                if (t === 1 || t === 6) {
-                    ctx.fillStyle = "#2a3a1a";
-                    ctx.fillRect(ox + c * ts_mini_w, oy + r * ts_mini_h, ts_mini_w + 0.5, ts_mini_h + 0.5);
-                } else if (t === 8) {
-                    ctx.fillStyle = "#224488";
-                    ctx.fillRect(ox + c * ts_mini_w, oy + r * ts_mini_h, ts_mini_w + 0.5, ts_mini_h + 0.5);
-                }
+                if (t === 1 || t === 6) { ctx.fillStyle = "#2a3a1a"; ctx.fillRect(ox+c*tw, oy+r*th, tw+0.5, th+0.5); }
+                else if (t === 8) { ctx.fillStyle = "#224488"; ctx.fillRect(ox+c*tw, oy+r*th, tw+0.5, th+0.5); }
             }
         }
 
-        // Stuck bunnies (blue dots)
+        // Stuck bunnies (blue)
         for (const b of game.stuckBunnies) {
             if (b.rescued) continue;
             ctx.fillStyle = "#4488ff";
-            ctx.beginPath();
-            ctx.arc(ox + b.x * scaleX, oy + b.y * scaleY, 2.5, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.beginPath(); ctx.arc(ox + b.x*scaleX, oy + b.y*scaleY, 2.5, 0, Math.PI*2); ctx.fill();
         }
 
-        // Rex (red dot)
+        // Followers (yellow)
+        for (const f of game.followers) {
+            if (f.scattered) continue;
+            ctx.fillStyle = "#ffcc44";
+            ctx.beginPath(); ctx.arc(ox + f.x*scaleX, oy + f.y*scaleY, 1.5, 0, Math.PI*2); ctx.fill();
+        }
+
+        // Rex (red)
         ctx.fillStyle = "#ff3333";
-        ctx.beginPath();
-        ctx.arc(ox + game.rex.x * scaleX, oy + game.rex.y * scaleY, 3.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(ox + game.rex.x*scaleX, oy + game.rex.y*scaleY, 3.5, 0, Math.PI*2); ctx.fill();
 
-        // Player (green dot)
+        // Player (green)
         ctx.fillStyle = "#00ff66";
-        ctx.beginPath();
-        ctx.arc(ox + game.player.x * scaleX, oy + game.player.y * scaleY, 3, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(ox + game.player.x*scaleX, oy + game.player.y*scaleY, 3, 0, Math.PI*2); ctx.fill();
 
-        // Viewport rectangle
-        ctx.strokeStyle = "rgba(255,255,255,0.4)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(
-            ox + game.camera.x * scaleX,
-            oy + game.camera.y * scaleY,
-            game.camera.viewW * scaleX,
-            game.camera.viewH * scaleY
-        );
+        // Viewport rect
+        ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1;
+        ctx.strokeRect(ox + game.camera.x*scaleX, oy + game.camera.y*scaleY, game.camera.viewW*scaleX, game.camera.viewH*scaleY);
     }
 }
 
@@ -1231,10 +2009,14 @@ class Game {
         this.mapRenderer = new MapRenderer();
         this.hud = new HUD();
         this.minimap = new Minimap();
+        this.scentTrail = new ScentTrail();
+        this.dayNight = new DayNightCycle();
+        this.dayNight.init(CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        this.music = new MusicSystem(this.audio);
 
-        // Game state
-        this.state = "title"; // "title", "playing", "gameover", "win"
-        this.rescuedCount = 0;
+        // State
+        this.state = "title";
+        this.rescuedCount = 0;  // Bunnies safely banked at checkpoints
         this.textPopups = [];
 
         // Input
@@ -1248,14 +2030,25 @@ class Game {
         this.stuckBunnies = [];
         this.checkpoints = [];
         this.activeCheckpoint = null;
+        this.followers = [];     // Caravan (#3)
+        this.thrownSticks = [];  // In-flight sticks (#7)
+        this.stickPickups = [];  // Map pickups (#7)
+        this.loreNotes = [];     // (#9)
 
         // Timing
         this.lastTime = 0;
         this.gameTime = 0;
+        this.playTimer = 0;      // Speedrun timer (#10)
 
-        // "Caught" freeze frame
+        // Freeze
         this.freezeTimer = 0;
-        this.caughtMessage = null;
+
+        // Lore note display (#9)
+        this.showingNote = null;
+        this.noteTimer = 0;
+
+        // Best time (#10)
+        this.bestTime = parseFloat(localStorage.getItem("bunny_best_time") || "0");
 
         this._initEntities();
     }
@@ -1264,7 +2057,6 @@ class Game {
         window.addEventListener("keydown", (e) => {
             this.keys[e.code] = true;
             this.keyJustPressed[e.code] = true;
-            // Only initialize audio on first user interaction
             this.audio.init();
             e.preventDefault();
         });
@@ -1275,35 +2067,48 @@ class Game {
     }
 
     _initEntities() {
-        // Player
         const startPos = tileCenter(PLAYER_START.col, PLAYER_START.row);
         this.player = new Player(startPos.x, startPos.y);
 
-        // Rex
         const rexPos = tileCenter(REX_START.col, REX_START.row);
         this.rex = new Rex(rexPos.x, rexPos.y);
 
-        // Stuck bunnies
         this.stuckBunnies = STUCK_BUNNY_POSITIONS.map(p => new StuckBunny(p.col, p.row));
 
-        // Checkpoints — find all '3' tiles in the map
         this.checkpoints = [];
         for (let r = 0; r < MAP_ROWS; r++) {
             for (let c = 0; c < MAP_COLS; c++) {
-                if (tileAt(c, r) === 3) {
-                    this.checkpoints.push(new Checkpoint(c, r));
-                }
+                if (tileAt(c, r) === 3) this.checkpoints.push(new Checkpoint(c, r));
             }
         }
-
-        // Activate starting checkpoint
         if (this.checkpoints.length > 0) {
             this.checkpoints[0].activated = true;
             this.activeCheckpoint = this.checkpoints[0];
         }
 
+        // Stick pickups (#7) — find tile 9 positions
+        this.stickPickups = [];
+        for (let r = 0; r < MAP_ROWS; r++) {
+            for (let c = 0; c < MAP_COLS; c++) {
+                if (tileAt(c, r) === 9) this.stickPickups.push(new StickPickup(c, r));
+            }
+        }
+
+        // Lore notes (#9)
+        this.loreNotes = LORE_NOTES.map(d => new LoreNote(d));
+
+        this.followers = [];
+        this.thrownSticks = [];
         this.rescuedCount = 0;
         this.textPopups = [];
+        this.scentTrail.clear();
+        this.playTimer = 0;
+        this.showingNote = null;
+    }
+
+    throwStick(fromX, fromY, toX, toY) {
+        const stick = new ThrownStick(fromX, fromY, toX, toY);
+        this.thrownSticks.push(stick);
     }
 
     playerCaught() {
@@ -1312,27 +2117,60 @@ class Game {
         this.audio.playCaught();
         this.particles.emitCaught(this.player.x, this.player.y);
         this.freezeTimer = 0.6;
-        this.caughtMessage = new TextPopup(this.player.x, this.player.y - 20, "CAUGHT!", "#ff2222", 28, 1.5);
-        this.textPopups.push(this.caughtMessage);
+        this.textPopups.push(new TextPopup(this.player.x, this.player.y - 20, "CAUGHT!", "#ff2222", 28, 1.5));
+        this.camera.shake(CONFIG.SHAKE_CAUGHT_INTENSITY, CONFIG.SHAKE_CAUGHT_DURATION);
+
+        // Scatter caravan followers (#3)
+        if (this.followers.length > 0) {
+            this.audio.playScatter();
+            this.textPopups.push(new TextPopup(this.player.x, this.player.y - 45, "Bunnies scattered!", "#ffaa00", 16, 1.5));
+            for (const f of this.followers) f.scatter(this);
+            this.followers = [];
+        }
 
         if (this.player.lives <= 0) {
             this.state = "gameover";
             this.audio.playGameOver();
+            this.music.stop();
             return;
         }
 
-        // Respawn at the active checkpoint
         if (this.activeCheckpoint) {
             this.player.x = this.activeCheckpoint.x;
             this.player.y = this.activeCheckpoint.y;
         }
-        // Send Rex back to patrol
         this.rex.state = "return";
+        this.music.setState("calm");
+    }
+
+    // Deposit followers at a checkpoint (#3)
+    _depositFollowers(cp) {
+        if (this.followers.length === 0) return;
+        const count = this.followers.length;
+        this.rescuedCount += count;
+        this.audio.playDeposit();
+        this.particles.emitDeposit(cp.x, cp.y);
+        this.textPopups.push(new TextPopup(cp.x, cp.y - 25, `+${count} Safe! ✅`, "#44ff44", 20, 1.5));
+        this.camera.shake(CONFIG.SHAKE_RESCUE_INTENSITY, CONFIG.SHAKE_RESCUE_DURATION);
+        this.camera.zoomPulse(1.05, 0.5);
+        this.followers = [];
+
+        // Check win condition
+        if (this.rescuedCount >= STUCK_BUNNY_POSITIONS.length) {
+            this.winGame();
+        }
     }
 
     winGame() {
         this.state = "win";
         this.audio.playWin();
+        this.music.stop();
+
+        // Save best time (#10)
+        if (this.bestTime === 0 || this.playTimer < this.bestTime) {
+            this.bestTime = this.playTimer;
+            localStorage.setItem("bunny_best_time", String(this.playTimer));
+        }
     }
 
     restart() {
@@ -1341,23 +2179,22 @@ class Game {
         const startPos = tileCenter(PLAYER_START.col, PLAYER_START.row);
         this.camera.x = startPos.x - CONFIG.CANVAS_WIDTH / 2;
         this.camera.y = startPos.y - CONFIG.CANVAS_HEIGHT / 2;
+        this.dayNight.time = 0;
+        this.music.start();
+        this.music.setState("calm");
+        this.music.rescuedVoices = 0;
     }
 
-    // --- Main Loop ---
     run() {
         this.lastTime = performance.now();
         const loop = (now) => {
             const rawDt = (now - this.lastTime) / 1000;
-            const dt = Math.min(rawDt, 0.05); // Cap deltaTime to prevent physics tunneling
+            const dt = Math.min(rawDt, 0.05);
             this.lastTime = now;
             this.gameTime += dt;
-
             this._update(dt);
             this._draw();
-
-            // Clear just-pressed
             this.keyJustPressed = {};
-
             requestAnimationFrame(loop);
         };
         requestAnimationFrame(loop);
@@ -1369,15 +2206,23 @@ class Game {
                 if (this.keyJustPressed["Enter"] || this.keyJustPressed["Space"]) {
                     this.state = "playing";
                     this.audio.init();
+                    this.music.start();
                 }
                 break;
 
             case "playing":
-                // Freeze frame after being caught
+                // Lore note display pauses gameplay (#9)
+                if (this.showingNote) {
+                    if (Object.keys(this.keyJustPressed).length > 0) {
+                        this.showingNote = null;
+                    }
+                    return;
+                }
+
+                // Freeze frame
                 if (this.freezeTimer > 0) {
                     this.freezeTimer -= dt;
                     this.particles.update(dt);
-                    // Update text popups during freeze
                     for (let i = this.textPopups.length - 1; i >= 0; i--) {
                         this.textPopups[i].update(dt);
                         if (this.textPopups[i].dead) this.textPopups.splice(i, 1);
@@ -1385,13 +2230,63 @@ class Game {
                     return;
                 }
 
+                // Speedrun timer (#10)
+                this.playTimer += dt;
+
+                // Day/Night (#1)
+                this.dayNight.update(dt);
+
+                // Music (#6)
+                const nightAmt = this.dayNight.nightAmount;
+                if (this.rex.state !== "chase" && this.rex.state !== "sniff") {
+                    this.music.setState(nightAmt > 0.5 ? "night" : "calm");
+                }
+                this.music.update(dt, nightAmt);
+
+                // Scent (#5)
+                this.scentTrail.update(dt, this.player.x, this.player.y, this.player.isHiding);
+                // Erase scent near water
+                for (let r = 0; r < MAP_ROWS; r++) {
+                    for (let c = 0; c < MAP_COLS; c++) {
+                        if (tileAt(c, r) === 8) {
+                            const wc = tileCenter(c, r);
+                            this.scentTrail.eraseNear(wc.x, wc.y, CONFIG.TILE_SIZE);
+                        }
+                    }
+                }
+
                 this.player.update(dt, this.keys, this);
                 this.rex.update(dt, this);
 
-                // Update bunnies
+                // Followers (#3)
+                for (const f of this.followers) f.update(dt, this);
+
+                // Thrown sticks (#7)
+                for (let i = this.thrownSticks.length - 1; i >= 0; i--) {
+                    this.thrownSticks[i].update(dt);
+                    if (!this.thrownSticks[i].flying) {
+                        const s = this.thrownSticks[i];
+                        this.particles.emitStickLand(s.x, s.y);
+                        // If Rex is not in fetch state, send him to fetch
+                        if (this.rex.state !== "fetch") {
+                            this.rex.startFetch(s.x, s.y);
+                            this.textPopups.push(new TextPopup(this.rex.x, this.rex.y - 30, "FETCH!", "#44cc44", 22, 1.0));
+                            this.music.setState("calm");
+                        }
+                        this.thrownSticks.splice(i, 1);
+                    }
+                }
+
+                // Stick pickups (#7)
+                for (const sp of this.stickPickups) sp.update(dt, this);
+
+                // Lore notes (#9)
+                for (const ln of this.loreNotes) ln.update(dt, this);
+
+                // Bunnies
                 for (const b of this.stuckBunnies) b.update(dt);
 
-                // Checkpoints
+                // Checkpoints — activate & deposit followers (#3)
                 for (const cp of this.checkpoints) {
                     cp.update(dt);
                     if (!cp.activated && dist(this.player.x, this.player.y, cp.x, cp.y) < 30) {
@@ -1399,6 +2294,10 @@ class Game {
                         this.activeCheckpoint = cp;
                         this.audio.playCheckpoint();
                         this.textPopups.push(new TextPopup(cp.x, cp.y - 20, "Checkpoint!", "#ffcc00", 18, 1.0));
+                    }
+                    // Deposit followers at any activated checkpoint
+                    if (cp.activated && this.followers.length > 0 && dist(this.player.x, this.player.y, cp.x, cp.y) < 35) {
+                        this._depositFollowers(cp);
                     }
                 }
 
@@ -1417,10 +2316,7 @@ class Game {
 
             case "gameover":
             case "win":
-                if (this.keyJustPressed["Enter"] || this.keyJustPressed["KeyR"]) {
-                    this.restart();
-                }
-                // Still update particles for visual polish
+                if (this.keyJustPressed["Enter"] || this.keyJustPressed["KeyR"]) this.restart();
                 this.particles.update(dt);
                 for (let i = this.textPopups.length - 1; i >= 0; i--) {
                     this.textPopups[i].update(dt);
@@ -1434,7 +2330,6 @@ class Game {
         const ctx = this.ctx;
         const cam = this.camera;
 
-        // Clear
         ctx.fillStyle = "#2a3a2a";
         ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
 
@@ -1446,35 +2341,80 @@ class Game {
             case "playing":
             case "gameover":
             case "win":
+                // Apply zoom (#8)
+                ctx.save();
+                if (cam.zoom !== 1) {
+                    const cx = CONFIG.CANVAS_WIDTH / 2, cy = CONFIG.CANVAS_HEIGHT / 2;
+                    ctx.translate(cx, cy);
+                    ctx.scale(cam.zoom, cam.zoom);
+                    ctx.translate(-cx, -cy);
+                }
+
+                const nightAmount = this.dayNight.nightAmount;
+
                 // World
                 this.mapRenderer.draw(ctx, cam);
 
-                // Checkpoints (under entities)
-                for (const cp of this.checkpoints) cp.draw(ctx, cam);
+                // Scent trail debug visual (subtle)
+                if (this.scentTrail.points.length > 0) {
+                    ctx.globalAlpha = 0.08;
+                    for (const p of this.scentTrail.points) {
+                        const a = p.life / p.maxLife;
+                        ctx.fillStyle = "#ffaa00";
+                        ctx.globalAlpha = a * 0.1;
+                        ctx.beginPath();
+                        ctx.arc(p.x - cam.ex, p.y - cam.ey, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.globalAlpha = 1;
+                }
+
+                // Checkpoints
+                for (const cp of this.checkpoints) cp.draw(ctx, cam, nightAmount);
+
+                // Lore notes (#9)
+                for (const ln of this.loreNotes) ln.draw(ctx, cam);
+
+                // Stick pickups (#7)
+                for (const sp of this.stickPickups) sp.draw(ctx, cam);
 
                 // Stuck bunnies
-                for (const b of this.stuckBunnies) b.draw(ctx, cam);
+                for (const b of this.stuckBunnies) b.draw(ctx, cam, nightAmount);
+
+                // Followers (#3)
+                for (const f of this.followers) f.draw(ctx, cam);
+
+                // Thrown sticks
+                for (const s of this.thrownSticks) s.draw(ctx, cam);
 
                 // Rex
-                this.rex.draw(ctx, cam);
+                this.rex.draw(ctx, cam, nightAmount);
 
                 // Player
                 this.player.draw(ctx, cam);
 
-                // Particles (on top of entities)
+                // Particles
                 this.particles.draw(ctx, cam);
 
-                // Rescue progress arc
+                // Rescue progress
                 this.hud.drawRescueProgress(ctx, cam, this);
 
                 // Text popups
                 for (const tp of this.textPopups) tp.draw(ctx, cam);
 
-                // HUD
+                // Day/Night lighting overlay (#1)
+                this.dayNight.drawLighting(ctx, cam, this);
+
+                ctx.restore(); // End zoom
+
+                // HUD (on top of everything, not affected by zoom)
                 this.hud.draw(ctx, this);
 
                 // Minimap
                 this.minimap.draw(ctx, this);
+
+                // Lore note popup (#9)
+                if (this.showingNote) this._drawNotePopup(ctx, this.showingNote);
 
                 // Overlays
                 if (this.state === "gameover") this._drawGameOver(ctx);
@@ -1484,17 +2424,12 @@ class Game {
     }
 
     _drawTitle(ctx) {
-        const cx = CONFIG.CANVAS_WIDTH / 2;
-        const cy = CONFIG.CANVAS_HEIGHT / 2;
-
-        // Background gradient
+        const cx = CONFIG.CANVAS_WIDTH / 2, cy = CONFIG.CANVAS_HEIGHT / 2;
         const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.CANVAS_HEIGHT);
-        grad.addColorStop(0, "#1a3a1a");
-        grad.addColorStop(1, "#0a200a");
+        grad.addColorStop(0, "#1a3a1a"); grad.addColorStop(1, "#0a200a");
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
 
-        // Drifting grass blades (decorative)
         ctx.fillStyle = "#2a5a2a";
         for (let i = 0; i < 30; i++) {
             const x = (i * 37 + this.gameTime * 10) % CONFIG.CANVAS_WIDTH;
@@ -1502,96 +2437,178 @@ class Game {
             ctx.fillRect(x, y, 2, 12 + Math.sin(this.gameTime + i) * 4);
         }
 
-        // Title
-        ctx.font = "bold 52px Arial";
-        ctx.fillStyle = "#ffffff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("🐰 Bunny's Jailbreak! 🐰", cx, cy - 100);
+        ctx.font = "bold 52px Arial"; ctx.fillStyle = "#fff";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🐰 Bunny's Jailbreak! 🐰", cx, cy - 120);
 
-        // Subtitle
-        ctx.font = "20px Arial";
-        ctx.fillStyle = "#aaddaa";
-        ctx.fillText("Sir Fluffles must rescue the citizens of Bun Bun City!", cx, cy - 50);
+        ctx.font = "18px Arial"; ctx.fillStyle = "#aaddaa";
+        ctx.fillText("Sir Fluffles must rescue the citizens of Bun Bun City!", cx, cy - 70);
 
-        // Instructions
-        ctx.font = "16px Arial";
-        ctx.fillStyle = "#88bb88";
+        ctx.font = "15px Arial"; ctx.fillStyle = "#88bb88";
         const instructions = [
-            "WASD / Arrow Keys — Move",
-            "SPACE — Dash (when moving)",
-            "E (hold) — Rescue stuck bunnies",
+            "WASD / Arrows — Move      SPACE — Dash",
+            "E (hold) — Rescue bunnies   Q — Hide in bushes",
+            "F (hold) — Aim stick, release to throw",
             "",
-            "Avoid Rex the German Shepherd! 🐕",
-            "Rescue all 10 bunnies to win!",
+            "Rescue bunnies then bring them to a 🥕 Checkpoint to bank them!",
+            "Beware: Rex scatters your followers if he catches you!",
+            "Day turns to night — your visibility shrinks, Rex hears better!",
+            "",
+            "🐕 Avoid Rex!   📜 Find lore notes!   ⭐ Race the clock!",
         ];
-        instructions.forEach((line, i) => {
-            ctx.fillText(line, cx, cy + 20 + i * 28);
-        });
+        instructions.forEach((line, i) => ctx.fillText(line, cx, cy - 20 + i * 24));
 
-        // Start prompt
-        ctx.font = "bold 22px Arial";
-        ctx.fillStyle = "#ffffff";
+        // Best time
+        if (this.bestTime > 0) {
+            const bm = Math.floor(this.bestTime / 60), bs = Math.floor(this.bestTime % 60);
+            ctx.font = "bold 14px Arial"; ctx.fillStyle = "#ffcc44";
+            ctx.fillText(`Best Time: ${String(bm).padStart(2,"0")}:${String(bs).padStart(2,"0")}`, cx, cy + 200);
+        }
+
+        ctx.font = "bold 22px Arial"; ctx.fillStyle = "#fff";
         ctx.globalAlpha = 0.5 + Math.sin(this.gameTime * 3) * 0.5;
-        ctx.fillText("Press ENTER or SPACE to Start", cx, cy + 220);
+        ctx.fillText("Press ENTER or SPACE to Start", cx, cy + 230);
         ctx.globalAlpha = 1;
     }
 
-    _drawGameOver(ctx) {
-        ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    _drawNotePopup(ctx, note) {
+        // Semi-transparent overlay
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
         ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
 
-        const cx = CONFIG.CANVAS_WIDTH / 2;
-        const cy = CONFIG.CANVAS_HEIGHT / 2;
+        const cx = CONFIG.CANVAS_WIDTH / 2, cy = CONFIG.CANVAS_HEIGHT / 2;
+        // Parchment background
+        ctx.fillStyle = "#f4e4c1";
+        const pw = 500, ph = 250;
+        ctx.fillRect(cx - pw/2, cy - ph/2, pw, ph);
+        ctx.strokeStyle = "#8B7355"; ctx.lineWidth = 3;
+        ctx.strokeRect(cx - pw/2, cy - ph/2, pw, ph);
 
-        ctx.font = "bold 48px Arial";
-        ctx.fillStyle = "#ff4444";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        // Title
+        ctx.font = "bold 18px 'Georgia', serif"; ctx.fillStyle = "#4a3520";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(`📜 ${note.title}`, cx, cy - ph/2 + 30);
+
+        // Body text
+        ctx.font = "14px 'Georgia', serif"; ctx.fillStyle = "#5a4530";
+        const lines = note.text.split("\n");
+        lines.forEach((line, i) => ctx.fillText(line, cx, cy - 30 + i * 24));
+
+        // Dismiss hint
+        ctx.font = "12px Arial"; ctx.fillStyle = "#888";
+        ctx.fillText("Press any key to continue...", cx, cy + ph/2 - 20);
+    }
+
+    _drawGameOver(ctx) {
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        const cx = CONFIG.CANVAS_WIDTH / 2, cy = CONFIG.CANVAS_HEIGHT / 2;
+
+        ctx.font = "bold 48px Arial"; ctx.fillStyle = "#ff4444";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("GAME OVER", cx, cy - 40);
 
-        ctx.font = "20px Arial";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText(`You rescued ${this.rescuedCount} / ${STUCK_BUNNY_POSITIONS.length} bunnies`, cx, cy + 10);
+        ctx.font = "20px Arial"; ctx.fillStyle = "#fff";
+        ctx.fillText(`Banked ${this.rescuedCount} / ${STUCK_BUNNY_POSITIONS.length} bunnies`, cx, cy + 10);
 
-        ctx.font = "bold 18px Arial";
-        ctx.fillStyle = "#aaaaaa";
+        ctx.font = "bold 18px Arial"; ctx.fillStyle = "#aaa";
         ctx.globalAlpha = 0.5 + Math.sin(this.gameTime * 3) * 0.5;
         ctx.fillText("Press ENTER or R to Restart", cx, cy + 60);
         ctx.globalAlpha = 1;
     }
 
     _drawWin(ctx) {
-        ctx.fillStyle = "rgba(0, 40, 0, 0.65)";
+        ctx.fillStyle = "rgba(0,40,0,0.65)";
         ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        const cx = CONFIG.CANVAS_WIDTH / 2, cy = CONFIG.CANVAS_HEIGHT / 2;
 
-        const cx = CONFIG.CANVAS_WIDTH / 2;
-        const cy = CONFIG.CANVAS_HEIGHT / 2;
+        ctx.font = "bold 42px Arial"; ctx.fillStyle = "#44ff44";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("🎉 ALL BUNNIES RESCUED! 🎉", cx, cy - 60);
 
-        ctx.font = "bold 48px Arial";
-        ctx.fillStyle = "#44ff44";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("🎉 ALL BUNNIES RESCUED! 🎉", cx, cy - 40);
+        ctx.font = "22px Arial"; ctx.fillStyle = "#fff";
+        ctx.fillText("Sir Fluffles saved Bun Bun City!", cx, cy - 20);
 
-        ctx.font = "22px Arial";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText("Sir Fluffles saved Bun Bun City!", cx, cy + 20);
+        // Time & Stars (#10)
+        const mins = Math.floor(this.playTimer / 60);
+        const secs = Math.floor(this.playTimer % 60);
+        ctx.font = "bold 20px Arial"; ctx.fillStyle = "#ffcc00";
+        ctx.fillText(`Time: ${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`, cx, cy + 20);
 
-        ctx.font = "bold 18px Arial";
-        ctx.fillStyle = "#aaaaaa";
+        let stars = 1;
+        if (this.playTimer < CONFIG.STAR_3_TIME) stars = 3;
+        else if (this.playTimer < CONFIG.STAR_2_TIME) stars = 2;
+
+        ctx.font = "36px serif";
+        const starStr = "⭐".repeat(stars) + "☆".repeat(3 - stars);
+        ctx.fillText(starStr, cx, cy + 60);
+
+        // Star thresholds info
+        ctx.font = "14px Arial"; ctx.fillStyle = "#aaa";
+        ctx.fillText(`⭐⭐⭐ < ${Math.floor(CONFIG.STAR_3_TIME/60)}:00   |   ⭐⭐ < ${Math.floor(CONFIG.STAR_2_TIME/60)}:00   |   ⭐ Completed`, cx, cy + 90);
+
+        // Best time
+        if (this.bestTime > 0) {
+            const bm = Math.floor(this.bestTime / 60), bs = Math.floor(this.bestTime % 60);
+            ctx.fillStyle = "#ffcc44";
+            ctx.fillText(`Best: ${String(bm).padStart(2,"0")}:${String(bs).padStart(2,"0")}`, cx, cy + 115);
+        }
+
+        // Notes collected
+        if (this.player.notesCollected.size > 0) {
+            ctx.fillStyle = "#ffffaa";
+            ctx.fillText(`📜 Lore Notes: ${this.player.notesCollected.size}/${LORE_NOTES.length}`, cx, cy + 138);
+        }
+
+        ctx.font = "bold 18px Arial"; ctx.fillStyle = "#aaa";
         ctx.globalAlpha = 0.5 + Math.sin(this.gameTime * 3) * 0.5;
-        ctx.fillText("Press ENTER or R to Play Again", cx, cy + 70);
+        ctx.fillText("Press ENTER or R to Play Again", cx, cy + 170);
         ctx.globalAlpha = 1;
     }
 }
 
 // ============================================================================
-//  BOOTSTRAP — Create game and start the loop
+//  BOOTSTRAP — Cutscene then game start
 // ============================================================================
-const canvas = document.getElementById("gameCanvas");
-const game = new Game(canvas);
-game.run();
+(function() {
+    const overlay = document.getElementById("cutscene-overlay");
+    const scenes  = overlay.querySelectorAll("img");
+    const prompt  = overlay.querySelector(".cutscene-prompt");
+    const cvs     = document.getElementById("gameCanvas");
+    let step = 0;
+
+    // Show first scene once its image loads (or immediately if cached)
+    function showScene(idx) {
+        scenes.forEach(img => img.classList.remove("active"));
+        scenes[idx].classList.add("active");
+    }
+
+    // Preload all three, then reveal scene 1
+    let loaded = 0;
+    scenes.forEach((img, i) => {
+        const check = () => { loaded++; if (loaded === scenes.length) showScene(0); };
+        if (img.complete) check();
+        else { img.addEventListener("load", check); img.addEventListener("error", check); }
+    });
+
+    overlay.addEventListener("click", function advance() {
+        step++;
+        if (step < scenes.length) {
+            showScene(step);
+        } else {
+            // Fade out overlay, start game
+            overlay.style.transition = "opacity 0.5s ease";
+            overlay.style.opacity = "0";
+            setTimeout(() => {
+                overlay.style.display = "none";
+                cvs.style.display = "";
+                const game = new Game(cvs);
+                game.run();
+            }, 500);
+            overlay.removeEventListener("click", advance);
+        }
+    });
+})();
 </script>
 </body>
 </html>
