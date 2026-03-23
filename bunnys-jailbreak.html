@@ -483,14 +483,24 @@ class AudioSystem {
     constructor() {
         this.ctx = null;
         this.initialized = false;
+        this.sfxGain = null;      // Master SFX volume node
+        this.sfxVolume = 1.0;     // 0..1
     }
 
     init() {
         if (this.initialized) return;
         try {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this.sfxGain = this.ctx.createGain();
+            this.sfxGain.connect(this.ctx.destination);
+            this.sfxGain.gain.setValueAtTime(this.sfxVolume, this.ctx.currentTime);
             this.initialized = true;
         } catch (e) { console.warn("Web Audio not available"); }
+    }
+
+    setSfxVolume(v) {
+        this.sfxVolume = v;
+        if (this.sfxGain) this.sfxGain.gain.setValueAtTime(v, this.ctx.currentTime);
     }
 
     _tone(freq, duration, type = "square", volume = 0.15, rampDown = true) {
@@ -501,7 +511,7 @@ class AudioSystem {
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         gain.gain.setValueAtTime(volume, this.ctx.currentTime);
         if (rampDown) gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        osc.connect(gain); gain.connect(this.ctx.destination);
+        osc.connect(gain); gain.connect(this.sfxGain || this.ctx.destination);
         osc.start(); osc.stop(this.ctx.currentTime + duration);
     }
 
@@ -556,6 +566,8 @@ class MusicSystem {
         this.beatInterval = 0.5; // seconds per beat
         this.beatIndex = 0;
         this.rescuedVoices = 0;
+        this.musicGain = null;   // Master music volume node
+        this.musicVolume = 1.0;  // 0..1
 
         // Chord progressions
         this.calmChords = [
@@ -574,7 +586,22 @@ class MusicSystem {
         this.masterVolume = 0.03;
     }
 
-    start() { this.playing = true; }
+    _ensureGain() {
+        if (!this.musicGain && this.audioSys.ctx) {
+            this.musicGain = this.audioSys.ctx.createGain();
+            this.musicGain.connect(this.audioSys.ctx.destination);
+            this.musicGain.gain.setValueAtTime(this.musicVolume, this.audioSys.ctx.currentTime);
+        }
+    }
+
+    setMusicVolume(v) {
+        this.musicVolume = v;
+        if (this.musicGain && this.audioSys.ctx) {
+            this.musicGain.gain.setValueAtTime(v, this.audioSys.ctx.currentTime);
+        }
+    }
+
+    start() { this.playing = true; this._ensureGain(); }
     stop() { this.playing = false; }
 
     setState(s) { this.targetState = s; }
@@ -642,7 +669,8 @@ class MusicSystem {
         osc.frequency.setValueAtTime(freq, when);
         gain.gain.setValueAtTime(vol, when);
         gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-        osc.connect(gain); gain.connect(ctx.destination);
+        const dest = this.musicGain || ctx.destination;
+        osc.connect(gain); gain.connect(dest);
         osc.start(when); osc.stop(when + dur);
     }
 
@@ -657,7 +685,8 @@ class MusicSystem {
         src.buffer = buf;
         gain.gain.setValueAtTime(vol, when);
         gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-        src.connect(gain); gain.connect(ctx.destination);
+        const dest = this.musicGain || ctx.destination;
+        src.connect(gain); gain.connect(dest);
         src.start(when); src.stop(when + dur);
     }
 }
@@ -2019,6 +2048,12 @@ class Game {
         this.rescuedCount = 0;  // Bunnies safely banked at checkpoints
         this.textPopups = [];
 
+        // Pause menu
+        this.pauseMenuIdx = 0;
+        this.pauseItems = ["Resume", "Restart Game", "Music: ON", "SFX: ON", "Replay Intro"];
+        this.musicOn = true;
+        this.sfxOn = true;
+
         // Input
         this.keys = {};
         this.keyJustPressed = {};
@@ -2201,12 +2236,38 @@ class Game {
     }
 
     _update(dt) {
+        // Pause toggle (Escape key)
+        if (this.keyJustPressed["Escape"]) {
+            if (this.state === "playing") {
+                this.state = "paused";
+                this.pauseMenuIdx = 0;
+                this.music.stop();
+                return;
+            } else if (this.state === "paused") {
+                this.state = "playing";
+                this.music.start();
+                return;
+            }
+        }
+
         switch (this.state) {
             case "title":
                 if (this.keyJustPressed["Enter"] || this.keyJustPressed["Space"]) {
                     this.state = "playing";
                     this.audio.init();
                     this.music.start();
+                }
+                break;
+
+            case "paused":
+                if (this.keyJustPressed["ArrowUp"]) {
+                    this.pauseMenuIdx = (this.pauseMenuIdx - 1 + this.pauseItems.length) % this.pauseItems.length;
+                }
+                if (this.keyJustPressed["ArrowDown"]) {
+                    this.pauseMenuIdx = (this.pauseMenuIdx + 1) % this.pauseItems.length;
+                }
+                if (this.keyJustPressed["Enter"]) {
+                    this._handlePauseSelect(this.pauseMenuIdx);
                 }
                 break;
 
@@ -2338,6 +2399,10 @@ class Game {
                 this._drawTitle(ctx);
                 break;
 
+            case "paused":
+                this._drawPause(ctx);
+                break;
+
             case "playing":
             case "gameover":
             case "win":
@@ -2455,6 +2520,8 @@ class Game {
             "Day turns to night — your visibility shrinks, Rex hears better!",
             "",
             "🐕 Avoid Rex!   📜 Find lore notes!   ⭐ Race the clock!",
+            "",
+            "ESC — Pause Menu",
         ];
         instructions.forEach((line, i) => ctx.fillText(line, cx, cy - 20 + i * 24));
 
@@ -2565,6 +2632,247 @@ class Game {
         ctx.fillText("Press ENTER or R to Play Again", cx, cy + 170);
         ctx.globalAlpha = 1;
     }
+
+    // ---- Pause menu logic ----
+    _handlePauseSelect(idx) {
+        switch (idx) {
+            case 0: // Resume
+                this.state = "playing";
+                this.music.start();
+                break;
+            case 1: // Restart Game
+                this.state = "playing";
+                this.restart();
+                break;
+            case 2: // Toggle Music
+                this.musicOn = !this.musicOn;
+                this.pauseItems[2] = "Music: " + (this.musicOn ? "ON" : "OFF");
+                this.music.setMusicVolume(this.musicOn ? 1.0 : 0);
+                break;
+            case 3: // Toggle SFX
+                this.sfxOn = !this.sfxOn;
+                this.pauseItems[3] = "SFX: " + (this.sfxOn ? "ON" : "OFF");
+                this.audio.setSfxVolume(this.sfxOn ? 1.0 : 0);
+                break;
+            case 4: // Replay Intro
+                this.music.stop();
+                if (window._replayIntro) window._replayIntro();
+                break;
+        }
+    }
+
+    _drawPause(ctx) {
+        // Draw a static snapshot of the game world behind the overlay
+        ctx.save();
+        const cam = this.camera;
+        if (cam.zoom !== 1) {
+            const cx2 = CONFIG.CANVAS_WIDTH / 2, cy2 = CONFIG.CANVAS_HEIGHT / 2;
+            ctx.translate(cx2, cy2);
+            ctx.scale(cam.zoom, cam.zoom);
+            ctx.translate(-cx2, -cy2);
+        }
+        this.mapRenderer.draw(ctx, cam);
+        for (const cp of this.checkpoints) cp.draw(ctx, cam, this.dayNight.nightAmount);
+        for (const b of this.stuckBunnies) b.draw(ctx, cam, this.dayNight.nightAmount);
+        for (const f of this.followers) f.draw(ctx, cam);
+        this.rex.draw(ctx, cam, this.dayNight.nightAmount);
+        this.player.draw(ctx, cam);
+        this.dayNight.drawLighting(ctx, cam, this);
+        ctx.restore();
+
+        // Dark overlay
+        ctx.fillStyle = "rgba(0,0,0,0.72)";
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+
+        const cx = CONFIG.CANVAS_WIDTH / 2;
+        let y = CONFIG.CANVAS_HEIGHT / 2 - 100;
+
+        // Title
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "bold 36px Arial"; ctx.fillStyle = "#ffcc00";
+        ctx.fillText("⏸ PAUSED", cx, y);
+        y += 60;
+
+        // Menu items
+        for (let i = 0; i < this.pauseItems.length; i++) {
+            const selected = i === this.pauseMenuIdx;
+            ctx.font = selected ? "bold 24px Arial" : "22px Arial";
+            ctx.fillStyle = selected ? "#44ff44" : "#cccccc";
+            const label = (selected ? "▸ " : "  ") + this.pauseItems[i];
+            ctx.fillText(label, cx, y);
+            y += 40;
+        }
+
+        // Hint
+        ctx.font = "14px Arial"; ctx.fillStyle = "#888";
+        ctx.fillText("↑↓ Navigate  ·  ENTER Select  ·  ESC Resume", cx, y + 20);
+    }
+}
+
+// ============================================================================
+//  CUTSCENE MUSIC — Procedural mood-matched audio for each scene
+//  Scene 1: Peaceful, warm, golden-hour meadow (gentle arpeggios, birdsong)
+//  Scene 2: Panic & chaos (dissonant stabs, frantic pulse, rumbling bass)
+//  Scene 3: Heroic determination (bold brass-like chords, rising motif)
+// ============================================================================
+class CutsceneMusic {
+    constructor() {
+        this.ctx = null;
+        this.master = null;
+        this.activeNodes = [];
+        this.loopId = null;
+    }
+
+    init() {
+        if (this.ctx) return;
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        this.master = this.ctx.createGain();
+        this.master.gain.setValueAtTime(0.18, this.ctx.currentTime);
+        this.master.connect(this.ctx.destination);
+    }
+
+    // --- Stop all current sounds with a short fade ---
+    stop() {
+        if (!this.ctx) return;
+        if (this.loopId) { clearInterval(this.loopId); this.loopId = null; }
+        const now = this.ctx.currentTime;
+        this.master.gain.setValueAtTime(this.master.gain.value, now);
+        this.master.gain.linearRampToValueAtTime(0, now + 0.4);
+        setTimeout(() => {
+            for (const n of this.activeNodes) { try { n.stop(); } catch(e){} }
+            this.activeNodes = [];
+            this.master.gain.setValueAtTime(0.18, this.ctx.currentTime);
+        }, 500);
+    }
+
+    _osc(freq, type, vol, fadeIn, dur) {
+        const ctx = this.ctx, now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, now);
+        g.gain.setValueAtTime(0, now);
+        g.gain.linearRampToValueAtTime(vol, now + fadeIn);
+        if (dur > 0) g.gain.linearRampToValueAtTime(0, now + dur);
+        osc.connect(g); g.connect(this.master);
+        osc.start(now);
+        if (dur > 0) osc.stop(now + dur + 0.05);
+        this.activeNodes.push(osc);
+        return osc;
+    }
+
+    _note(freq, dur, type, vol, delay) {
+        const ctx = this.ctx, when = ctx.currentTime + delay;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, when);
+        g.gain.setValueAtTime(0, when);
+        g.gain.linearRampToValueAtTime(vol, when + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+        osc.connect(g); g.connect(this.master);
+        osc.start(when); osc.stop(when + dur + 0.05);
+        this.activeNodes.push(osc);
+    }
+
+    // ---- Scene 1: Peaceful / Golden-hour meadow ----
+    playScene1() {
+        this.init();
+        this.stop();
+        setTimeout(() => {
+            // Warm pad — layered sine drones in C major
+            this._osc(131, "sine", 0.12, 1.0, 0);     // C3
+            this._osc(165, "sine", 0.08, 1.5, 0);     // E3
+            this._osc(196, "sine", 0.06, 2.0, 0);     // G3
+            this._osc(262, "sine", 0.04, 2.5, 0);     // C4 shimmer
+
+            // Gentle arpeggio loop — pentatonic notes
+            const arpNotes = [523, 587, 659, 784, 880, 784, 659, 587]; // C5 D5 E5 G5 A5...
+            let beatIdx = 0;
+            this.loopId = setInterval(() => {
+                const f = arpNotes[beatIdx % arpNotes.length];
+                this._note(f, 0.6, "sine", 0.06, 0);
+                // Occasional sparkle an octave up
+                if (beatIdx % 3 === 0) this._note(f * 2, 0.3, "sine", 0.02, 0.15);
+                beatIdx++;
+            }, 400);
+        }, 500);
+    }
+
+    // ---- Scene 2: Panic / Chaos ----
+    playScene2() {
+        this.init();
+        this.stop();
+        setTimeout(() => {
+            // Low rumbling drone — dissonant
+            this._osc(55, "sawtooth", 0.08, 0.3, 0);   // A1 rumble
+            this._osc(58.5, "sawtooth", 0.06, 0.5, 0);  // Slightly detuned — tension
+            this._osc(82, "triangle", 0.05, 0.4, 0);    // E2
+
+            // Frantic heartbeat pulse
+            let beat = 0;
+            const chaosNotes = [
+                [147, 175, 220],  // D3 F3 A3 — diminished
+                [156, 196, 233],  // Eb3 G3 Bb3
+                [131, 156, 196],  // C3 Eb3 G3 — C minor
+                [117, 147, 175],  // Bb2 D3 F3
+            ];
+            this.loopId = setInterval(() => {
+                const chord = chaosNotes[beat % chaosNotes.length];
+                // Sharp staccato stabs
+                for (const f of chord) {
+                    this._note(f, 0.12, "sawtooth", 0.09, 0);
+                }
+                // High-pitched scatter squeaks (bunnies panicking)
+                if (beat % 2 === 0) {
+                    const squeak = 1200 + Math.random() * 800;
+                    this._note(squeak, 0.06, "sine", 0.03, Math.random() * 0.1);
+                }
+                // Percussive thump (Rex footsteps)
+                this._note(40, 0.08, "square", 0.12, 0);
+                beat++;
+            }, 200);
+        }, 500);
+    }
+
+    // ---- Scene 3: Heroic / Determined ----
+    playScene3() {
+        this.init();
+        this.stop();
+        setTimeout(() => {
+            // Bold low brass-like pad — C minor to Ab major (heroic minor)
+            this._osc(131, "sawtooth", 0.04, 0.5, 0);  // C3
+            this._osc(156, "sawtooth", 0.03, 0.8, 0);  // Eb3
+            this._osc(196, "sawtooth", 0.03, 1.0, 0);  // G3
+
+            // Rising heroic motif — repeating loop
+            const motif = [
+                { f: 262, d: 0.35 },  // C4
+                { f: 311, d: 0.35 },  // Eb4
+                { f: 392, d: 0.50 },  // G4 (held)
+                { f: 440, d: 0.25 },  // Ab4
+                { f: 392, d: 0.25 },  // G4
+                { f: 523, d: 0.80 },  // C5 — climax, long hold
+                { f: 0,   d: 0.60 },  // rest
+            ];
+            let noteIdx = 0;
+            const playNext = () => {
+                if (!this.loopId) return;
+                const m = motif[noteIdx % motif.length];
+                if (m.f > 0) {
+                    this._note(m.f, m.d * 0.9, "triangle", 0.10, 0);
+                    // Octave doubling on climax note
+                    if (m.f === 523) {
+                        this._note(m.f * 2, m.d * 0.6, "sine", 0.04, 0);
+                        this._note(m.f / 2, m.d * 0.8, "triangle", 0.05, 0);
+                    }
+                }
+                noteIdx++;
+                this.loopId = setTimeout(playNext, m.d * 1000);
+            };
+            this.loopId = setTimeout(playNext, 300);
+        }, 500);
+    }
 }
 
 // ============================================================================
@@ -2575,39 +2883,72 @@ class Game {
     const scenes  = overlay.querySelectorAll("img");
     const prompt  = overlay.querySelector(".cutscene-prompt");
     const cvs     = document.getElementById("gameCanvas");
+    const music   = new CutsceneMusic();
     let step = 0;
+    let currentGame = null;
+
+    const scenePlayers = [
+        () => music.playScene1(),
+        () => music.playScene2(),
+        () => music.playScene3(),
+    ];
 
     // Show first scene once its image loads (or immediately if cached)
     function showScene(idx) {
         scenes.forEach(img => img.classList.remove("active"));
         scenes[idx].classList.add("active");
+        scenePlayers[idx]();
     }
 
-    // Preload all three, then reveal scene 1
-    let loaded = 0;
-    scenes.forEach((img, i) => {
-        const check = () => { loaded++; if (loaded === scenes.length) showScene(0); };
-        if (img.complete) check();
-        else { img.addEventListener("load", check); img.addEventListener("error", check); }
-    });
+    function startCutscene() {
+        step = 0;
+        overlay.style.transition = "none";
+        overlay.style.opacity = "1";
+        overlay.style.display = "";
+        cvs.style.display = "none";
+        let loaded = 0;
+        scenes.forEach((img, i) => {
+            const check = () => { loaded++; if (loaded === scenes.length) showScene(0); };
+            if (img.complete) check();
+            else { img.addEventListener("load", check, { once: true }); img.addEventListener("error", check, { once: true }); }
+        });
+        overlay.addEventListener("click", advance);
+    }
 
-    overlay.addEventListener("click", function advance() {
+    function advance() {
+        music.init();
         step++;
         if (step < scenes.length) {
             showScene(step);
         } else {
-            // Fade out overlay, start game
+            music.stop();
             overlay.style.transition = "opacity 0.5s ease";
             overlay.style.opacity = "0";
             setTimeout(() => {
                 overlay.style.display = "none";
                 cvs.style.display = "";
-                const game = new Game(cvs);
-                game.run();
+                if (!currentGame) {
+                    currentGame = new Game(cvs);
+                    currentGame.run();
+                } else {
+                    currentGame.restart();
+                }
+                currentGame.state = "title";
             }, 500);
             overlay.removeEventListener("click", advance);
         }
-    });
+    }
+
+    // Replay-intro hook used by pause menu
+    window._replayIntro = function() {
+        if (currentGame) {
+            currentGame.music.stop();
+        }
+        startCutscene();
+    };
+
+    // Initial cutscene start
+    startCutscene();
 })();
 </script>
 </body>
